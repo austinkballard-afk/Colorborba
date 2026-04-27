@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Colorborba</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="hud">
+    <div class="target">
+      <span class="target-label">Match this color</span>
+      <span class="target-swatch" id="target-swatch" aria-label="Target color"></span>
+    </div>
+    <button id="reset-btn" class="reset-btn" type="button" aria-label="New puzzle">&#x21bb;</button>
+  </header>
+
+  <canvas id="game" class="game"></canvas>
+
+  <div id="overlay" class="overlay hidden" role="dialog" aria-modal="true">
+    <div class="overlay-card">
+      <h1 id="overlay-title">Nice mix!</h1>
+      <p id="overlay-subtitle"></p>
+      <button id="overlay-btn" class="primary-btn" type="button">Play again</button>
+    </div>
+  </div>
+
+  <script src="src/color.js"></script>
+  <script src="src/blob.js"></script>
+  <script src="src/puzzle.js"></script>
+  <script src="src/input.js"></script>
+  <script src="src/main.js"></script>
+</body>
+</html>
