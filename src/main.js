@@ -34,8 +34,11 @@
 
   function resize() {
     dpr = Math.max(1, window.devicePixelRatio || 1);
-    width = window.innerWidth;
-    height = window.innerHeight;
+    // Prefer visualViewport on mobile so URL-bar collapse / pinch zoom
+    // give us the actual visible area.
+    const vv = window.visualViewport;
+    width = vv ? vv.width : window.innerWidth;
+    height = vv ? vv.height : window.innerHeight;
     canvas.width = Math.round(width * dpr);
     canvas.height = Math.round(height * dpr);
     canvas.style.width = width + 'px';
@@ -46,6 +49,14 @@
     if (center) {
       center.x = centerX;
       center.y = centerY;
+    }
+    // Re-clamp any free orbiters so they're not stuck outside the new bounds
+    // after an orientation change.
+    for (const o of orbiters) {
+      if (!o.alive) continue;
+      const r = o.radius;
+      o.x = Math.min(Math.max(o.x, r), width - r);
+      o.y = Math.min(Math.max(o.y, r), height - r);
     }
   }
 
@@ -162,13 +173,14 @@
       } else if (o.mode === 'free') {
         o.updateFree(dt);
 
-        // Off-screen culling: if an orbiter flies way out, gently rebound it
-        // so it doesn't disappear forever. Friendlier than instant death.
-        const margin = 60;
-        if (o.x < -margin) { o.x = -margin; o.vx = Math.abs(o.vx) * 0.6; }
-        if (o.x > width + margin) { o.x = width + margin; o.vx = -Math.abs(o.vx) * 0.6; }
-        if (o.y < -margin) { o.y = -margin; o.vy = Math.abs(o.vy) * 0.6; }
-        if (o.y > height + margin) { o.y = height + margin; o.vy = -Math.abs(o.vy) * 0.6; }
+        // Bounce off the visible edges of the canvas. Restitution slightly
+        // damps so the orbiter eventually settles instead of pinballing.
+        const r = o.radius;
+        const restitution = 0.78;
+        if (o.x - r < 0) { o.x = r; o.vx = Math.abs(o.vx) * restitution; }
+        if (o.x + r > width) { o.x = width - r; o.vx = -Math.abs(o.vx) * restitution; }
+        if (o.y - r < 0) { o.y = r; o.vy = Math.abs(o.vy) * restitution; }
+        if (o.y + r > height) { o.y = height - r; o.vy = -Math.abs(o.vy) * restitution; }
 
         // Absorption check.
         const dx = o.x - center.x;
@@ -264,9 +276,11 @@
     buildPuzzle();
   });
 
-  window.addEventListener('resize', () => {
-    resize();
-  });
+  window.addEventListener('resize', resize);
+  window.addEventListener('orientationchange', resize);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', resize);
+  }
 
   // --- Boot ---
 
