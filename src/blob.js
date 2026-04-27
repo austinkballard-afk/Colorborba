@@ -43,6 +43,9 @@
       // Squash-stretch impulse (set externally on absorption, decays to 0).
       this.squashImpulse = 0;
 
+      // 0..1 — escalates jiggle amplitude/frequency (driven by streak).
+      this.intensity = 0;
+
       // Slight rotation so jiggle pattern slowly rotates.
       this.rotation = rand(0, Math.PI * 2);
       this.rotationSpeed = rand(-0.15, 0.15);
@@ -80,11 +83,14 @@
       const r = this.radius;
       const out = new Float32Array(POINT_COUNT);
       const squash = this.squashImpulse;
+      const intensity = this.intensity > 0 ? this.intensity : 0;
+      const ampScale = 1 + 0.7 * intensity;
+      const freqScale = 1 + 0.3 * intensity;
       for (let i = 0; i < POINT_COUNT; i++) {
         const ang = (i / POINT_COUNT) * Math.PI * 2 + this.rotation;
         let perturb = 0;
         for (const w of this.jigglePhases) {
-          perturb += w.amp * Math.sin(t * w.freq + w.phase + ang * w.spatial);
+          perturb += (w.amp * ampScale) * Math.sin(t * w.freq * freqScale + w.phase + ang * w.spatial);
         }
         // Brief overall pulse on absorption (uniform expansion for ~one frame
         // burst which then decays).

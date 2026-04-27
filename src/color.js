@@ -80,6 +80,19 @@
     ];
   }
 
+  // Inverse of mix: given the current mixed color and mass, and the absorbed
+  // contribution, return the color that the mix had before that contribution
+  // was added. Exact because mix is a mass-weighted average.
+  function unmix(curColor, curMass, absorbedColor, absorbedMass) {
+    const oldMass = curMass - absorbedMass;
+    if (oldMass <= 0) return [0, 0, 0];
+    return [
+      clamp01((curColor[0] * curMass - absorbedColor[0] * absorbedMass) / oldMass),
+      clamp01((curColor[1] * curMass - absorbedColor[1] * absorbedMass) / oldMass),
+      clamp01((curColor[2] * curMass - absorbedColor[2] * absorbedMass) / oldMass),
+    ];
+  }
+
   // Euclidean distance in RYB space (0..sqrt(3)).
   function distance(a, b) {
     const dr = a[0] - b[0];
@@ -114,6 +127,7 @@
     rybToCss,
     rybToHex,
     mix,
+    unmix,
     distance,
     lightenRgb,
     darkenRgb,

@@ -1,31 +1,35 @@
-// Drag-and-flick input. Supports mouse + touch via Pointer Events.
-// While grabbed, the held blob follows the pointer. On release, we compute
-// a velocity from a short ring buffer of recent samples (~80ms) and hand
-// the blob back to game logic.
+// Pointer-driven input. Two kinds of grabs:
+//   'orbiter' — flick a satellite into the center.
+//   'center'  — drag-out to pull the most recent absorbed blob back out.
+//
+// On release we hand main.js a unified payload with the resolved velocity,
+// the kind, and the drag distance so main.js can decide how to interpret it.
 
 (function (global) {
   'use strict';
 
   const SAMPLE_WINDOW_MS = 80;
-  const MAX_FLICK_SPEED = 2200; // px/sec, clamp so wild flicks don't overshoot
-  const TAP_RELEASE_NUDGE = 280; // px/sec when released without motion
+  const MAX_FLICK_SPEED = 2200; // px/sec
+  const TAP_RELEASE_NUDGE = 280; // px/sec for slow orbiter releases
 
   function attachInput(canvas, ctx) {
     // ctx provides:
-    //   getOrbiters() -> Blob[]
-    //   getCenter() -> Blob
-    //   onGrab(blob) / onRelease(blob, vx, vy)
+    //   getOrbiters()          -> Blob[]
+    //   getCenter()            -> Blob
+    //   canPullCenter()        -> boolean    // history non-empty + game playing
+    //   onGrab({ kind, blob, x, y })
+    //   onMove({ kind, blob, x, y })
+    //   onRelease({ kind, blob, vx, vy, releaseX, releaseY, dragDist })
 
     let activePointerId = null;
+    let kind = null; // 'orbiter' | 'center'
     let grabbed = null;
-    let samples = []; // {t, x, y}
+    let startX = 0, startY = 0;
+    let samples = [];
 
     function localXY(ev) {
       const rect = canvas.getBoundingClientRect();
-      return {
-        x: ev.clientX - rect.left,
-        y: ev.clientY - rect.top,
-      };
+      return { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
     }
 
     function pushSample(t, x, y) {
@@ -34,59 +38,72 @@
       while (samples.length > 1 && samples[0].t < cutoff) samples.shift();
     }
 
+    function tryGrab(x, y) {
+      const orbiters = ctx.getOrbiters();
+      for (let i = orbiters.length - 1; i >= 0; i--) {
+        if (orbiters[i].mode === 'orbit' && orbiters[i].hitTest(x, y)) {
+          return { kind: 'orbiter', blob: orbiters[i] };
+        }
+      }
+      const center = ctx.getCenter();
+      if (center && center.hitTest(x, y) && ctx.canPullCenter && ctx.canPullCenter()) {
+        return { kind: 'center', blob: center };
+      }
+      return null;
+    }
+
     function onPointerDown(ev) {
       if (activePointerId !== null) return;
       const { x, y } = localXY(ev);
-      const orbiters = ctx.getOrbiters();
-      // Hit-test top-down (last drawn wins) — orbiters are drawn in order.
-      let hit = null;
-      for (let i = orbiters.length - 1; i >= 0; i--) {
-        if (orbiters[i].mode === 'orbit' && orbiters[i].hitTest(x, y)) {
-          hit = orbiters[i];
-          break;
-        }
-      }
-      if (!hit) return;
+      const target = tryGrab(x, y);
+      if (!target) return;
 
       ev.preventDefault();
       activePointerId = ev.pointerId;
-      grabbed = hit;
+      kind = target.kind;
+      grabbed = target.blob;
+      startX = x;
+      startY = y;
       samples = [];
-      const now = performance.now();
-      pushSample(now, x, y);
+      pushSample(performance.now(), x, y);
 
-      grabbed.mode = 'grabbed';
-      grabbed.vx = 0;
-      grabbed.vy = 0;
-      grabbed.x = x;
-      grabbed.y = y;
+      if (kind === 'orbiter') {
+        grabbed.mode = 'grabbed';
+        grabbed.vx = 0;
+        grabbed.vy = 0;
+        grabbed.x = x;
+        grabbed.y = y;
+      }
 
-      try { canvas.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
+      try { canvas.setPointerCapture(ev.pointerId); } catch (_) { /* ignore */ }
       canvas.classList.add('grabbing');
-      if (ctx.onGrab) ctx.onGrab(grabbed);
+      if (ctx.onGrab) ctx.onGrab({ kind, blob: grabbed, x, y });
     }
 
     function onPointerMove(ev) {
       if (ev.pointerId !== activePointerId || !grabbed) return;
       const { x, y } = localXY(ev);
       const now = performance.now();
-      grabbed.x = x;
-      grabbed.y = y;
       pushSample(now, x, y);
+      if (kind === 'orbiter') {
+        grabbed.x = x;
+        grabbed.y = y;
+      }
+      if (ctx.onMove) ctx.onMove({ kind, blob: grabbed, x, y });
     }
 
     function onPointerEnd(ev) {
       if (ev.pointerId !== activePointerId) return;
       if (!grabbed) {
         activePointerId = null;
+        kind = null;
         return;
       }
 
-      const now = performance.now();
       const { x, y } = localXY(ev);
+      const now = performance.now();
       pushSample(now, x, y);
 
-      // Velocity from oldest-vs-newest sample in the window.
       let vx = 0, vy = 0;
       if (samples.length >= 2) {
         const a = samples[0];
@@ -98,31 +115,50 @@
         }
       }
 
-      // If they basically didn't flick, give it a tiny nudge toward the
-      // center so a simple tap still does something forgiving.
       const speed = Math.hypot(vx, vy);
-      if (speed < 80) {
-        const center = ctx.getCenter();
-        const dx = center.x - grabbed.x;
-        const dy = center.y - grabbed.y;
-        const d = Math.hypot(dx, dy) || 1;
-        vx = (dx / d) * TAP_RELEASE_NUDGE;
-        vy = (dy / d) * TAP_RELEASE_NUDGE;
-      } else if (speed > MAX_FLICK_SPEED) {
-        const k = MAX_FLICK_SPEED / speed;
-        vx *= k;
-        vy *= k;
+
+      if (kind === 'orbiter') {
+        // Slow release becomes a forgiving nudge toward the center.
+        if (speed < 80) {
+          const center = ctx.getCenter();
+          const dx = center.x - grabbed.x;
+          const dy = center.y - grabbed.y;
+          const d = Math.hypot(dx, dy) || 1;
+          vx = (dx / d) * TAP_RELEASE_NUDGE;
+          vy = (dy / d) * TAP_RELEASE_NUDGE;
+        } else if (speed > MAX_FLICK_SPEED) {
+          const k = MAX_FLICK_SPEED / speed;
+          vx *= k;
+          vy *= k;
+        }
+      } else if (kind === 'center') {
+        if (speed > MAX_FLICK_SPEED) {
+          const k = MAX_FLICK_SPEED / speed;
+          vx *= k;
+          vy *= k;
+        }
       }
 
-      const released = grabbed;
+      const dragDist = Math.hypot(x - startX, y - startY);
+      const payload = {
+        kind,
+        blob: grabbed,
+        vx,
+        vy,
+        releaseX: x,
+        releaseY: y,
+        dragDist,
+      };
+
       grabbed = null;
+      kind = null;
       activePointerId = null;
       samples = [];
       canvas.classList.remove('grabbing');
 
-      if (ctx.onRelease) ctx.onRelease(released, vx, vy);
+      if (ctx.onRelease) ctx.onRelease(payload);
 
-      try { canvas.releasePointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
+      try { canvas.releasePointerCapture(ev.pointerId); } catch (_) { /* ignore */ }
     }
 
     canvas.addEventListener('pointerdown', onPointerDown);
@@ -132,10 +168,9 @@
 
     return {
       cancel() {
-        if (grabbed) {
-          grabbed.mode = 'orbit';
-          grabbed = null;
-        }
+        if (kind === 'orbiter' && grabbed) grabbed.mode = 'orbit';
+        grabbed = null;
+        kind = null;
         activePointerId = null;
         samples = [];
         canvas.classList.remove('grabbing');

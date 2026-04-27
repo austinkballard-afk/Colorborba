@@ -8,14 +8,32 @@
 </head>
 <body>
   <header class="hud">
-    <div class="target">
-      <span class="target-label">Match this color</span>
-      <span class="target-swatch" id="target-swatch" aria-label="Target color"></span>
+    <div class="hud-row hud-left">
+      <div class="target">
+        <span class="target-label">Match</span>
+        <span class="target-swatch" id="target-swatch" aria-label="Target color"></span>
+      </div>
+      <div class="chip score-chip" id="score-chip">
+        <span class="chip-label">Score</span>
+        <span class="chip-value" id="score-value">0</span>
+      </div>
+      <div class="chip streak-chip hidden" id="streak-chip">
+        <span class="streak-flame" aria-hidden="true">&#x1F525;</span>
+        <span class="chip-value" id="streak-value">&times;1</span>
+      </div>
     </div>
-    <button id="reset-btn" class="reset-btn" type="button" aria-label="New puzzle">&#x21bb;</button>
+    <div class="hud-row hud-right">
+      <div class="chip best-chip" id="best-chip">
+        <span class="chip-label">Best</span>
+        <span class="chip-value" id="best-value">0</span>
+      </div>
+      <button id="reset-btn" class="reset-btn" type="button" aria-label="New puzzle">&#x21bb;</button>
+    </div>
   </header>
 
   <canvas id="game" class="game"></canvas>
+
+  <div id="score-popup" class="score-popup hidden" aria-hidden="true"></div>
 
   <div id="overlay" class="overlay hidden" role="dialog" aria-modal="true">
     <div class="overlay-card">
@@ -28,6 +46,8 @@
   <script src="src/color.js"></script>
   <script src="src/blob.js"></script>
   <script src="src/puzzle.js"></script>
+  <script src="src/score.js"></script>
+  <script src="src/particles.js"></script>
   <script src="src/input.js"></script>
   <script src="src/main.js"></script>
 </body>
