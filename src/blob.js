@@ -18,6 +18,9 @@
       this.y = opts.y || 0;
       this.vx = 0;
       this.vy = 0;
+      // Spring target while in 'grabbed' mode. main.js integrates the spring.
+      this.targetX = this.x;
+      this.targetY = this.y;
       this.color = opts.color.slice(); // RYB
       this.mass = opts.mass || 1;
       this.baseRadius = opts.radius || 30;
@@ -86,15 +89,27 @@
       const intensity = this.intensity > 0 ? this.intensity : 0;
       const ampScale = 1 + 0.7 * intensity;
       const freqScale = 1 + 0.3 * intensity;
+
+      // Velocity-driven directional stretch (liquid feel). Elongates the blob
+      // along its motion direction and squishes it perpendicular, smoothly
+      // saturating with speed.
+      const speed = Math.hypot(this.vx, this.vy);
+      const stretch = Math.min(0.55, speed / 900);
+      const velAngle = speed > 0.001 ? Math.atan2(this.vy, this.vx) : 0;
+
       for (let i = 0; i < POINT_COUNT; i++) {
         const ang = (i / POINT_COUNT) * Math.PI * 2 + this.rotation;
         let perturb = 0;
         for (const w of this.jigglePhases) {
           perturb += (w.amp * ampScale) * Math.sin(t * w.freq * freqScale + w.phase + ang * w.spatial);
         }
-        // Brief overall pulse on absorption (uniform expansion for ~one frame
-        // burst which then decays).
+        // Brief overall pulse on absorption.
         perturb += squash * 0.18;
+        // Directional stretch: cos(2*delta) maps to +stretch on the motion
+        // axis and -stretch perpendicular, preserving area roughly.
+        if (stretch > 0) {
+          perturb += stretch * Math.cos(2 * (ang - velAngle));
+        }
         out[i] = r * (1 + perturb);
       }
       return out;

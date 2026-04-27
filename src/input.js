@@ -41,7 +41,9 @@
     function tryGrab(x, y) {
       const orbiters = ctx.getOrbiters();
       for (let i = orbiters.length - 1; i >= 0; i--) {
-        if (orbiters[i].mode === 'orbit' && orbiters[i].hitTest(x, y)) {
+        // Any alive orbiter (orbiting or free-floating after flick / pull-out)
+        // is grabbable; only blobs already in our hand are skipped.
+        if (orbiters[i].mode !== 'grabbed' && orbiters[i].hitTest(x, y)) {
           return { kind: 'orbiter', blob: orbiters[i] };
         }
       }
@@ -69,10 +71,11 @@
 
       if (kind === 'orbiter') {
         grabbed.mode = 'grabbed';
-        grabbed.vx = 0;
-        grabbed.vy = 0;
-        grabbed.x = x;
-        grabbed.y = y;
+        // Hand the spring its target; main.js drives the actual position.
+        // We don't snap x/y or zero the velocity so a blob you grab mid-flight
+        // keeps its momentum and decelerates organically toward the finger.
+        grabbed.targetX = x;
+        grabbed.targetY = y;
       }
 
       try { canvas.setPointerCapture(ev.pointerId); } catch (_) { /* ignore */ }
@@ -86,8 +89,8 @@
       const now = performance.now();
       pushSample(now, x, y);
       if (kind === 'orbiter') {
-        grabbed.x = x;
-        grabbed.y = y;
+        grabbed.targetX = x;
+        grabbed.targetY = y;
       }
       if (ctx.onMove) ctx.onMove({ kind, blob: grabbed, x, y });
     }

@@ -14,10 +14,15 @@
   const PULLOUT_THRESHOLD = 28; // px drag before a center grab counts as a pull
   const CELEBRATION_MS = 1200;
   const SCORE_POPUP_MS = 1050;
+  // Grab spring: pulls the held blob toward the pointer with liquid lag.
+  // Slightly underdamped so a sudden stop produces a small jelly bounce.
+  const GRAB_STIFFNESS = 220;
+  const GRAB_DAMPING = 22;
 
   const canvas = document.getElementById('game');
   const ctx2d = canvas.getContext('2d');
   const targetSwatch = document.getElementById('target-swatch');
+  const targetCountEl = document.getElementById('target-count');
   const resetBtn = document.getElementById('reset-btn');
   const scoreValueEl = document.getElementById('score-value');
   const streakChipEl = document.getElementById('streak-chip');
@@ -114,6 +119,7 @@
 
     target = window.Puzzle.generateTarget(colors, ORBITER_MASS, CENTER_START_MASS);
     targetSwatch.style.backgroundColor = window.Color.rybToCss(target.color);
+    if (targetCountEl) targetCountEl.textContent = String(target.recipeSize);
 
     centerHistory = [];
     ripples = [];
@@ -257,6 +263,16 @@
       o.tickAnim(dt);
       if (o.mode === 'orbit') {
         o.updateOrbit(dt, centerX, centerY, t);
+      } else if (o.mode === 'grabbed') {
+        // Spring toward the pointer target. Drives blob velocity, which the
+        // stretch deformation in sampleRadii reads — so the faster you drag,
+        // the more the blob elongates.
+        const ax = (o.targetX - o.x) * GRAB_STIFFNESS - o.vx * GRAB_DAMPING;
+        const ay = (o.targetY - o.y) * GRAB_STIFFNESS - o.vy * GRAB_DAMPING;
+        o.vx += ax * dt;
+        o.vy += ay * dt;
+        o.x += o.vx * dt;
+        o.y += o.vy * dt;
       } else if (o.mode === 'free') {
         o.updateFree(dt);
 
