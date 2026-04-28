@@ -1,5 +1,7 @@
-// Light additive specks. Spawn rate scales with streak intensity.
-// Used both as ambient sparkle around active blobs and for solve bursts.
+// Two flavors of particle:
+//   ambient sparkle  — additive blend, gentle gravity, fades quickly.
+//   paint drip       — opaque, heavier gravity, falls off the tail of fast
+//                      blobs like dripping pigment.
 
 (function (global) {
   'use strict';
@@ -28,25 +30,24 @@
       this.spawnAccumulator += totalRate * dt;
       while (this.spawnAccumulator >= 1) {
         this.spawnAccumulator -= 1;
-        // Pick a source weighted by rate.
         let pick = Math.random() * totalRate;
         let chosen = sources[0];
         for (const s of sources) {
           pick -= s.rate;
           if (pick <= 0) { chosen = s; break; }
         }
-        this.spawnOne(chosen);
+        this.spawnSparkle(chosen);
       }
     }
 
-    spawnOne(source) {
+    spawnSparkle(source) {
       const ang = rand(0, Math.PI * 2);
       const ringR = source.radius * rand(0.85, 1.15);
       const x = source.x + Math.cos(ang) * ringR;
       const y = source.y + Math.sin(ang) * ringR;
       const speed = rand(8, 26);
       const vx = Math.cos(ang) * speed + rand(-6, 6);
-      const vy = Math.sin(ang) * speed + rand(-6, 6) - 8; // slight upward drift
+      const vy = Math.sin(ang) * speed + rand(-6, 6) - 8;
       const life = rand(0.55, 0.95);
       this.particles.push({
         x, y, vx, vy,
@@ -54,6 +55,28 @@
         maxLife: life,
         size: rand(1.4, 2.6),
         rgb: global.Color.rybToRgb(source.color),
+        solid: false,
+        gravity: 18,
+        drag: 0.92,
+      });
+    }
+
+    // Drips fall off the tail of a fast-moving blob. Seed with mostly the
+    // blob's velocity (so they trail behind for a moment) plus heavy gravity
+    // so they sag like real paint.
+    spawnDrip(x, y, vx, vy, color) {
+      const life = rand(0.6, 1.1);
+      this.particles.push({
+        x, y,
+        vx: vx * 0.18 + rand(-22, 22),
+        vy: vy * 0.18 + rand(-12, 22),
+        life,
+        maxLife: life,
+        size: rand(2.4, 3.8),
+        rgb: global.Color.rybToRgb(color),
+        solid: true,
+        gravity: 380,
+        drag: 0.985,
       });
     }
 
@@ -72,21 +95,24 @@
           maxLife: life,
           size: rand(1.8, 3.4),
           rgb,
+          solid: false,
+          gravity: 18,
+          drag: 0.92,
         });
       }
     }
 
     update(dt) {
-      const drag = Math.pow(0.92, dt * 60);
       const surviving = [];
       for (const p of this.particles) {
         p.life -= dt;
         if (p.life <= 0) continue;
         p.x += p.vx * dt;
         p.y += p.vy * dt;
+        const drag = Math.pow(p.drag, dt * 60);
         p.vx *= drag;
         p.vy *= drag;
-        p.vy += 18 * dt; // gentle gravity so bursts arc
+        p.vy += p.gravity * dt;
         surviving.push(p);
       }
       this.particles = surviving;
@@ -94,10 +120,33 @@
 
     draw(ctx) {
       if (!this.particles.length) return;
+
+      // Solid drips — opaque, normal compositing, drawn first so additive
+      // sparkles on top read clearly above them.
+      ctx.save();
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.35)';
+      ctx.shadowBlur = 4;
+      ctx.shadowOffsetY = 1.5;
+      for (const p of this.particles) {
+        if (!p.solid) continue;
+        const t = p.life / p.maxLife;
+        const alpha = Math.min(1, t * 1.6);
+        ctx.fillStyle = `rgba(${p.rgb[0]}, ${p.rgb[1]}, ${p.rgb[2]}, ${alpha})`;
+        ctx.beginPath();
+        // Slight vertical stretch so drips look elongated as they fall.
+        const sx = p.size * (0.85 + 0.25 * t);
+        const sy = sx * (1 + Math.min(0.8, Math.abs(p.vy) / 600));
+        ctx.ellipse(p.x, p.y, sx, sy, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+
+      // Additive sparkles.
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       for (const p of this.particles) {
-        const t = p.life / p.maxLife; // 1..0
+        if (p.solid) continue;
+        const t = p.life / p.maxLife;
         const alpha = Math.min(1, t * 1.4);
         ctx.fillStyle = `rgba(${p.rgb[0]}, ${p.rgb[1]}, ${p.rgb[2]}, ${alpha})`;
         ctx.beginPath();

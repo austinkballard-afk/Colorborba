@@ -90,11 +90,11 @@
       const ampScale = 1 + 0.7 * intensity;
       const freqScale = 1 + 0.3 * intensity;
 
-      // Velocity-driven directional stretch (liquid feel). Elongates the blob
-      // along its motion direction and squishes it perpendicular, smoothly
-      // saturating with speed.
+      // Velocity-driven tail. Concentrates elongation behind the direction
+      // of motion (cometlike), with a mild forward squish so the leading
+      // edge looks rounded.
       const speed = Math.hypot(this.vx, this.vy);
-      const stretch = Math.min(0.55, speed / 900);
+      const stretch = Math.min(0.6, speed / 700);
       const velAngle = speed > 0.001 ? Math.atan2(this.vy, this.vx) : 0;
 
       for (let i = 0; i < POINT_COUNT; i++) {
@@ -105,10 +105,15 @@
         }
         // Brief overall pulse on absorption.
         perturb += squash * 0.18;
-        // Directional stretch: cos(2*delta) maps to +stretch on the motion
-        // axis and -stretch perpendicular, preserving area roughly.
         if (stretch > 0) {
-          perturb += stretch * Math.cos(2 * (ang - velAngle));
+          const cosD = Math.cos(ang - velAngle);
+          // Back tail: ((1 - cosD) / 2)^4 spikes only on the trailing side
+          // and tapers to zero quickly toward the sides — a thin tail.
+          const backFactor = Math.pow((1 - cosD) * 0.5, 4);
+          // Forward squish: mild flattening of the leading edge.
+          const frontFactor = (1 + cosD) * 0.5;
+          perturb += stretch * 2.0 * backFactor;
+          perturb -= stretch * 0.18 * frontFactor;
         }
         out[i] = r * (1 + perturb);
       }

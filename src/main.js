@@ -18,6 +18,16 @@
   // Slightly underdamped so a sudden stop produces a small jelly bounce.
   const GRAB_STIFFNESS = 220;
   const GRAB_DAMPING = 22;
+  // Orbit attractor: free-mode blobs feel a radial spring toward the orbit
+  // ring radius. Stronger than passive drag so dropped/pulled blobs settle
+  // into orbit rather than drifting back into the center.
+  const RING_STIFFNESS = 6.5;
+  const RING_TANGENT_BIAS = 32; // gentle tangential nudge near the ring
+  // Free blobs only get absorbed when moving inward at least this fast (px/s),
+  // so a slow-drifting orbiter that grazes the center isn't sucked in.
+  const ABSORB_INWARD_SPEED = 110;
+  // Drips spawn from a free/grabbed blob once it exceeds this speed.
+  const DRIP_SPEED_THRESHOLD = 220;
 
   const canvas = document.getElementById('game');
   const ctx2d = canvas.getContext('2d');
@@ -52,6 +62,12 @@
 
   const scoreState = new window.Score.ScoreState();
   const particles = new window.Particles.ParticleSystem();
+
+  // The orbit ring is the comfortable resting radius for free-mode blobs.
+  // Same value buildPuzzle uses to lay out fresh orbiters.
+  function ringRadius() {
+    return Math.min(width, height) * 0.32;
+  }
 
   // --- Sizing ---
 
@@ -117,7 +133,7 @@
       }));
     }
 
-    target = window.Puzzle.generateTarget(colors, ORBITER_MASS, CENTER_START_MASS);
+    target = window.Puzzle.generateTarget(colors, ORBITER_MASS, CENTER_START_MASS, WIN_TOLERANCE);
     targetSwatch.style.backgroundColor = window.Color.rybToCss(target.color);
     if (targetCountEl) targetCountEl.textContent = String(target.recipeSize);
 
@@ -274,6 +290,33 @@
         o.x += o.vx * dt;
         o.y += o.vy * dt;
       } else if (o.mode === 'free') {
+        // Radial spring toward the orbit ring + a tangential bias once near
+        // the ring. Free blobs that aren't violently flicked end up settling
+        // into orbital motion rather than drifting back into the center.
+        const ringR = ringRadius();
+        const dx0 = o.x - center.x;
+        const dy0 = o.y - center.y;
+        const dist0 = Math.hypot(dx0, dy0) || 0.0001;
+        const radialErr = dist0 - ringR;
+        const ux = dx0 / dist0;
+        const uy = dy0 / dist0;
+        // Spring force pulling toward d == ringR (push out if inside, pull in if outside).
+        const springAx = -ux * radialErr * RING_STIFFNESS;
+        const springAy = -uy * radialErr * RING_STIFFNESS;
+        o.vx += springAx * dt;
+        o.vy += springAy * dt;
+        // When near the ring, encourage continued tangential motion in
+        // whichever direction the blob is already going. Tiny effect, but
+        // it keeps a settled blob orbiting instead of just floating.
+        if (Math.abs(radialErr) < ringR * 0.35) {
+          const tx = -uy;
+          const ty = ux;
+          const tProj = o.vx * tx + o.vy * ty;
+          const sign = tProj >= 0 ? 1 : -1;
+          o.vx += tx * sign * RING_TANGENT_BIAS * dt;
+          o.vy += ty * sign * RING_TANGENT_BIAS * dt;
+        }
+
         o.updateFree(dt);
 
         const r = o.radius;
@@ -286,8 +329,36 @@
         const dx = o.x - center.x;
         const dy = o.y - center.y;
         const dist = Math.hypot(dx, dy);
-        if (state === 'playing' && dist < center.radius + o.radius * 0.4) {
+        // Inward radial speed. Positive = moving toward center.
+        const inwardSpeed = dist > 0 ? -(o.vx * dx + o.vy * dy) / dist : 0;
+        const inAbsorbZone = dist < center.radius + o.radius * 0.4;
+        if (
+          state === 'playing'
+          && inAbsorbZone
+          && inwardSpeed > ABSORB_INWARD_SPEED
+        ) {
           absorb(o);
+        } else if (inAbsorbZone) {
+          // Drifting blob entered the absorb zone but isn't flicked hard
+          // enough — give it an outward push so it doesn't get stuck
+          // grinding against the center.
+          const push = 180;
+          o.vx += ux * push * dt;
+          o.vy += uy * push * dt;
+        }
+      }
+
+      // Paint drips off the trailing edge of fast-moving blobs (held or free).
+      if ((o.mode === 'grabbed' || o.mode === 'free') && state === 'playing') {
+        const speed = Math.hypot(o.vx, o.vy);
+        if (speed > DRIP_SPEED_THRESHOLD) {
+          const rate = (speed - DRIP_SPEED_THRESHOLD) / 130;
+          if (Math.random() < rate * dt) {
+            const va = Math.atan2(o.vy, o.vx);
+            const tx = o.x - Math.cos(va) * o.radius * 1.25;
+            const ty = o.y - Math.sin(va) * o.radius * 1.25;
+            particles.spawnDrip(tx, ty, o.vx, o.vy, o.color);
+          }
         }
       }
     }

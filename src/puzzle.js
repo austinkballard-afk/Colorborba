@@ -39,36 +39,68 @@
     return shuffle(chosen).slice(0, count);
   }
 
+  // Mix a subset described by a bitmask of indices into orbiterColors.
+  function mixSubset(mask, orbiterColors, orbiterMass, centerMass) {
+    let color = STARTER_CENTER.slice();
+    let mass = centerMass;
+    let count = 0;
+    for (let i = 0; i < orbiterColors.length; i++) {
+      if (mask & (1 << i)) {
+        color = global.Color.mix(color, mass, orbiterColors[i], orbiterMass);
+        mass += orbiterMass;
+        count++;
+      }
+    }
+    return { color, count };
+  }
+
+  // Smallest number of orbiters that can land within `tolerance` of the
+  // target. Palettes have overlapping colors (e.g. pink ≈ red diluted by
+  // white), so the random subset that *generated* the target isn't always
+  // the minimum required to *match* it.
+  function minRecipeSize(target, orbiterColors, orbiterMass, centerMass, tolerance) {
+    const n = orbiterColors.length;
+    let best = n;
+    for (let mask = 1; mask < (1 << n); mask++) {
+      const { color, count } = mixSubset(mask, orbiterColors, orbiterMass, centerMass);
+      if (count >= best) continue;
+      if (global.Color.distance(color, target) < tolerance) {
+        best = count;
+      }
+    }
+    return best;
+  }
+
   // Simulate absorbing a random non-empty subset to get a solvable target.
-  function generateTarget(orbiterColors, orbiterMass, centerMass) {
+  // tolerance is the win distance; used so recipeSize reflects the smallest
+  // subset that actually solves the puzzle (not necessarily the one used to
+  // generate it).
+  function generateTarget(orbiterColors, orbiterMass, centerMass, tolerance) {
+    const tol = typeof tolerance === 'number' ? tolerance : 0.085;
+
     let attempts = 0;
     while (attempts < 8) {
       attempts++;
-      const subset = orbiterColors.filter(() => Math.random() < 0.55);
-      if (subset.length === 0) continue;
-
-      let color = STARTER_CENTER.slice();
-      let mass = centerMass;
-      for (const c of subset) {
-        color = global.Color.mix(color, mass, c, orbiterMass);
-        mass += orbiterMass;
+      let mask = 0;
+      let count = 0;
+      for (let i = 0; i < orbiterColors.length; i++) {
+        if (Math.random() < 0.55) { mask |= (1 << i); count++; }
       }
+      if (count === 0) continue;
 
-      // Reject targets that are basically white (no mixing) — boring.
+      const { color } = mixSubset(mask, orbiterColors, orbiterMass, centerMass);
       const fromStart = global.Color.distance(color, STARTER_CENTER);
       if (fromStart < 0.18) continue;
 
-      return { color, recipeSize: subset.length };
+      const recipeSize = minRecipeSize(color, orbiterColors, orbiterMass, centerMass, tol);
+      return { color, recipeSize };
     }
 
     // Fallback: just mix the first 2 orbiters.
-    let color = STARTER_CENTER.slice();
-    let mass = centerMass;
-    for (let i = 0; i < Math.min(2, orbiterColors.length); i++) {
-      color = global.Color.mix(color, mass, orbiterColors[i], orbiterMass);
-      mass += orbiterMass;
-    }
-    return { color, recipeSize: Math.min(2, orbiterColors.length) };
+    const fallbackMask = 0b11;
+    const { color } = mixSubset(fallbackMask, orbiterColors, orbiterMass, centerMass);
+    const recipeSize = minRecipeSize(color, orbiterColors, orbiterMass, centerMass, tol);
+    return { color, recipeSize };
   }
 
   global.Puzzle = {
