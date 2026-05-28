@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>AI.exe &mdash; YouTube Poop</title>
+  <link rel="stylesheet" href="ytp.css" />
+</head>
+<body>
+  <!-- Fake video player chrome wrapping the "poop". -->
+  <div class="tube" id="tube">
+    <div class="tube-head">
+      <span class="tube-dot red"></span>
+      <span class="tube-dot yellow"></span>
+      <span class="tube-dot green"></span>
+      <span class="tube-title">YouTube Poop: A.I. Tries To Help &mdash; [REUPLOAD] (NOT CLICKBAIT)</span>
+    </div>
+
+    <!-- The screen everything is drawn / shaken / fried on. -->
+    <div class="screen" id="screen">
+      <div class="stage" id="stage">
+        <div class="bg" id="bg"></div>
+        <div class="caption" id="caption"></div>
+        <div class="subcaption" id="subcaption"></div>
+        <div class="sticker" id="sticker"></div>
+        <!-- Glitch ghosts for the RGB-split chromatic aberration effect. -->
+        <div class="ghost ghost-r" id="ghost-r"></div>
+        <div class="ghost ghost-b" id="ghost-b"></div>
+      </div>
+      <div class="scanlines" id="scanlines"></div>
+      <div class="vignette"></div>
+      <div class="cc" id="cc"></div>
+
+      <!-- Big play button for the cold open (also satisfies autoplay gesture rules). -->
+      <button class="play-gate" id="play-gate" type="button" aria-label="Play">
+        <span class="play-tri"></span>
+        <span class="play-hint">click to begin the suffering</span>
+      </button>
+    </div>
+
+    <!-- Fake YouTube scrubber / controls. -->
+    <div class="controls" id="controls">
+      <div class="bar" id="bar"><div class="bar-fill" id="bar-fill"></div></div>
+      <div class="ctl-row">
+        <button class="ctl" id="replay-btn" type="button">&#x25B6; replay</button>
+        <button class="ctl" id="mute-btn" type="button">&#x1F50A; sound</button>
+        <span class="ctl-time" id="ctl-time">0:00 / 0:00</span>
+        <span class="ctl-views">420,069,000 views</span>
+      </div>
+    </div>
+  </div>
+
+  <p class="disclaimer">
+    A procedurally-generated parody. No real video footage is used &mdash; every frame,
+    flash and bleep is synthesized in your browser. Best with sound on.
+  </p>
+
+  <script src="src/ytp.js"></script>
+</body>
+</html>
