@@ -250,7 +250,9 @@
       step(0, 0);
     }
 
-    return { start, total: fmt(total) };
+    // `cuts` / `applyCut` are exposed so an offline renderer can step the
+    // timeline deterministically (one cut at a time) when capturing frames.
+    return { start, total: fmt(total), cuts, applyCut };
   }
 
   /* ---------------------------------------------------------------- wiring */
@@ -268,6 +270,14 @@
     const audio = AudioKit();
     let director = Director(els, audio);
     els.time.textContent = '0:00 / ' + director.total;
+
+    // Hook for the offline frame renderer (scripts/render.js). Harmless in
+    // normal playback — nothing reads it unless a capture tool does.
+    window.__YTP__ = {
+      ready: true,
+      cuts: director.cuts,
+      apply(cut) { els.gate.classList.add('hidden'); els.scanlines.classList.add('on'); director.applyCut(cut); },
+    };
 
     const begin = () => { director = Director(els, audio); director.start(); };
     els.gate.addEventListener('click', begin);
