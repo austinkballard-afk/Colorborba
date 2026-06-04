@@ -80,6 +80,31 @@
       });
     }
 
+    // Pour droplet: a fat blob of pigment launched from a jar toward the well.
+    // Aimed so it arcs into the well and lands roughly when it arrives.
+    spawnPourDroplet(srcX, srcY, dstX, dstY, color) {
+      const dx = dstX - srcX;
+      const dy = dstY - srcY;
+      const travel = rand(0.16, 0.26); // seconds to reach the well
+      const gravity = 900;
+      // Solve for the launch velocity of a projectile that lands at dst in
+      // `travel` seconds under gravity.
+      const vx = dx / travel + rand(-18, 18);
+      const vy = (dy - 0.5 * gravity * travel * travel) / travel;
+      this.particles.push({
+        x: srcX + rand(-3, 3),
+        y: srcY + rand(-3, 3),
+        vx, vy,
+        life: travel,
+        maxLife: travel,
+        size: rand(2.6, 4.2),
+        rgb: global.Color.rybToRgb(color),
+        solid: true,
+        gravity,
+        drag: 0.999,
+      });
+    }
+
     // One-off burst at a point in a chosen color, e.g. solve celebration.
     burst(x, y, color, count) {
       const rgb = global.Color.rybToRgb(color);

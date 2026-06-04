@@ -1,76 +1,81 @@
-// Game entry point. Boots the canvas, builds puzzles back-to-back,
-// runs the rAF loop, and orchestrates absorption, pull-out, scoring,
-// and visual escalation.
+// Colorborba — a precision pigment-pouring puzzle.
+//
+// Press and hold a pigment jar to pour it into the central well. Because the
+// well's color is the mass-weighted average of everything in it, only the
+// *ratio* of pigments matters — and every pour shifts all ratios at once, so
+// landing an exact target color is a game of feel, planning, and recovery.
+//
+// This file owns the game loop, the pour/scrape/wash mechanics, scoring flow,
+// rendering of the play field, and all the juice.
 
 (function () {
   'use strict';
 
-  const ORBITER_COUNT = 6;
-  const ORBITER_RADIUS = 26;
-  const CENTER_RADIUS = 56;
-  const ORBITER_MASS = 1;
-  const CENTER_START_MASS = 1;
-  const WIN_TOLERANCE = 0.085;
-  const PULLOUT_THRESHOLD = 28; // px drag before a center grab counts as a pull
-  const CELEBRATION_MS = 1200;
-  const SCORE_POPUP_MS = 1050;
-  // Grab spring: pulls the held blob toward the pointer with liquid lag.
-  // Slightly underdamped so a sudden stop produces a small jelly bounce.
-  const GRAB_STIFFNESS = 220;
-  const GRAB_DAMPING = 22;
-  // Orbit attractor: free-mode blobs feel a radial spring toward the orbit
-  // ring radius. Stronger than passive drag so dropped/pulled blobs settle
-  // into orbit rather than drifting back into the center.
-  const RING_STIFFNESS = 6.5;
-  const RING_TANGENT_BIAS = 32; // gentle tangential nudge near the ring
-  // Free blobs only get absorbed when moving inward at least this fast (px/s),
-  // so a slow-drifting orbiter that grazes the center isn't sucked in.
-  const ABSORB_INWARD_SPEED = 110;
-  // Drips spawn from a free/grabbed blob once it exceeds this speed.
-  const DRIP_SPEED_THRESHOLD = 220;
+  const C = window.Color;
 
+  // --- Tunables ---
+  const POUR_RATE = 1.6;            // mass units per second at full flow
+  const MIN_POUR = 0.05;           // a quick tap still adds this much
+  const MATCH_DIST_MAX = 0.62;     // RYB distance mapped to 0% on the meter
+  const WELL_BASE_RADIUS = 44;
+  const WELL_MAX_RADIUS = 84;
+  const PIG_BASE_RADIUS = 17;
+  const OVERLAY_DELAY_MS = 660;
+
+  // --- DOM ---
   const canvas = document.getElementById('game');
   const ctx2d = canvas.getContext('2d');
-  const targetSwatch = document.getElementById('target-swatch');
-  const targetCountEl = document.getElementById('target-count');
-  const resetBtn = document.getElementById('reset-btn');
+  const levelValueEl = document.getElementById('level-value');
   const scoreValueEl = document.getElementById('score-value');
+  const bestValueEl = document.getElementById('best-value');
   const streakChipEl = document.getElementById('streak-chip');
   const streakValueEl = document.getElementById('streak-value');
-  const bestValueEl = document.getElementById('best-value');
-  const scorePopupEl = document.getElementById('score-popup');
+  const targetSwatchEl = document.getElementById('target-swatch');
+  const targetNameEl = document.getElementById('target-name');
+  const matchFillEl = document.getElementById('match-fill');
+  const matchPctEl = document.getElementById('match-pct');
+  const scrapeBtn = document.getElementById('scrape-btn');
+  const scrapeCountEl = document.getElementById('scrape-count');
+  const washBtn = document.getElementById('wash-btn');
+  const hintToast = document.getElementById('hint-toast');
   const overlay = document.getElementById('overlay');
+  const overlayStars = document.getElementById('overlay-stars');
+  const overlayTitle = document.getElementById('overlay-title');
+  const overlaySubtitle = document.getElementById('overlay-subtitle');
+  const overlayAward = document.getElementById('overlay-award');
+  const overlayBreakdown = document.getElementById('overlay-breakdown');
+  const overlayBtn = document.getElementById('overlay-btn');
 
+  // --- Canvas sizing ---
   let dpr = Math.max(1, window.devicePixelRatio || 1);
-  let width = 0;
-  let height = 0;
-  let centerX = 0;
-  let centerY = 0;
+  let width = 0, height = 0, centerX = 0, wellY = 0;
 
-  let state = 'playing'; // 'playing' | 'celebrating'
-  let center = null;
-  let orbiters = [];
-  let target = null;
+  // --- Game state ---
+  let state = 'playing';            // 'playing' | 'solved'
+  let levelData = null;
+  let well = null;                  // Blob; well.mass is real, color is the mix
+  let pigments = [];                // Blob[] with { id, reserve, capacity }
+  let target = null;                // RYB target color
+  let targetName = '';
+  let tolerance = 0.08;
+
+  let pouring = null;               // { pigment, chunk:{id,color,mass}, elapsed }
+  let pourHistory = [];             // stack of poured chunks for scrape/undo
+  let undosLeft = 3;
+  let undoCount = 0;
+  let washCount = 0;
+  let totalPoured = 0;
+  let wastedMass = 0;
+  let pourDropAccum = 0;
+
   let ripples = [];
-  let centerHistory = []; // stack of { color, mass } pushed on absorb
-
-  // While the player is dragging the center to pull a blob out.
-  // null when not pulling.
-  let pulling = null; // { startX, startY, x, y, color, mass }
-
-  let celebrationStartMs = 0;
+  let firstPourDone = false;
+  let solveTimer = 0;
 
   const scoreState = new window.Score.ScoreState();
   const particles = new window.Particles.ParticleSystem();
 
-  // The orbit ring is the comfortable resting radius for free-mode blobs.
-  // Same value buildPuzzle uses to lay out fresh orbiters.
-  function ringRadius() {
-    return Math.min(width, height) * 0.32;
-  }
-
-  // --- Sizing ---
-
+  // --- Layout ---
   function resize() {
     dpr = Math.max(1, window.devicePixelRatio || 1);
     const vv = window.visualViewport;
@@ -81,167 +86,203 @@
     canvas.style.width = width + 'px';
     canvas.style.height = height + 'px';
     ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+
     centerX = width / 2;
-    centerY = height / 2 + 12;
-    if (center) {
-      center.x = centerX;
-      center.y = centerY;
-    }
-    for (const o of orbiters) {
-      if (!o.alive) continue;
-      const r = o.radius;
-      o.x = Math.min(Math.max(o.x, r), width - r);
-      o.y = Math.min(Math.max(o.y, r), height - r);
+    wellY = Math.min(Math.max(height * 0.40, 230), height - 250);
+    if (well) { well.x = centerX; well.y = wellY; }
+    layoutPigments();
+  }
+
+  function layoutPigments() {
+    if (!pigments.length) return;
+    const n = pigments.length;
+    const margin = Math.max(42, width * 0.13);
+    const span = Math.max(1, width - margin * 2);
+    const baseY = Math.min(height - 110, height * 0.74);
+    const amp = Math.min(48, span * 0.10);
+    for (let i = 0; i < n; i++) {
+      const f = n === 1 ? 0.5 : i / (n - 1);
+      const x = margin + f * span;
+      const y = baseY - Math.sin(f * Math.PI) * amp;
+      pigments[i].homeX = x;
+      pigments[i].homeY = y;
+      pigments[i].bobPhase = pigments[i].bobPhase || Math.random() * Math.PI * 2;
     }
   }
 
-  // --- Puzzle lifecycle ---
+  // --- Level lifecycle ---
+  function loadLevel(level) {
+    levelData = window.Level.generateLevel(level);
+    target = levelData.target.slice();
+    tolerance = levelData.tolerance;
 
-  function buildPuzzle() {
-    const colors = window.Puzzle.pickOrbiterColors(ORBITER_COUNT);
+    well = new window.Blob({ x: centerX, y: wellY, color: [0, 0, 0], radius: WELL_BASE_RADIUS, mass: 0.0001, mode: 'free' });
+    well.mass = 0;
 
-    center = new window.Blob({
-      x: centerX,
-      y: centerY,
-      color: window.Puzzle.STARTER_CENTER,
-      radius: CENTER_RADIUS,
-      mass: CENTER_START_MASS,
-      mode: 'free',
-    });
-    center.vx = 0;
-    center.vy = 0;
-
-    orbiters = [];
-    const baseR = Math.min(width, height) * 0.32;
-    for (let i = 0; i < ORBITER_COUNT; i++) {
-      const ang = (i / ORBITER_COUNT) * Math.PI * 2 + Math.random() * 0.4;
-      const r = baseR + (Math.random() - 0.5) * 30;
-      const dir = Math.random() < 0.5 ? -1 : 1;
-      orbiters.push(new window.Blob({
-        x: centerX + Math.cos(ang) * r,
-        y: centerY + Math.sin(ang) * r,
-        color: colors[i],
-        radius: ORBITER_RADIUS,
-        mass: ORBITER_MASS,
+    pigments = levelData.tray.map((entry) => {
+      const b = new window.Blob({
+        x: centerX, y: height * 0.74,
+        color: entry.color,
+        radius: PIG_BASE_RADIUS,
+        mass: levelData.reserveCap,
         mode: 'orbit',
-        orbitRadius: r,
-        orbitAngle: ang,
-        orbitSpeed: dir * (0.18 + Math.random() * 0.18),
-        wobbleAmp: 8 + Math.random() * 6,
-        wobbleFreq: 0.6 + Math.random() * 0.7,
-        wobblePhase: Math.random() * Math.PI * 2,
-      }));
-    }
+        wobbleAmp: 0, wobbleFreq: 0,
+      });
+      b.id = entry.id;
+      b.capacity = levelData.reserveCap;
+      b.reserve = levelData.reserveCap;
+      b.bobPhase = Math.random() * Math.PI * 2;
+      b.bobSpeed = 0.6 + Math.random() * 0.5;
+      return b;
+    });
+    layoutPigments();
 
-    target = window.Puzzle.generateTarget(colors, ORBITER_MASS, CENTER_START_MASS, WIN_TOLERANCE);
-    targetSwatch.style.backgroundColor = window.Color.rybToCss(target.color);
-    if (targetCountEl) targetCountEl.textContent = String(target.recipeSize);
-
-    centerHistory = [];
+    pouring = null;
+    pourHistory = [];
+    undosLeft = levelData.undos;
+    undoCount = 0;
+    washCount = 0;
+    totalPoured = 0;
+    wastedMass = 0;
     ripples = [];
-    pulling = null;
     state = 'playing';
+
+    scoreState.beginLevel(level);
     overlay.classList.add('hidden');
 
-    scoreState.beginPuzzle();
-    refreshHud();
-  }
+    targetSwatchEl.style.backgroundColor = C.rybToCss(target);
+    targetName = window.Namer.nameColor(C.rybToRgb(target));
+    targetNameEl.innerHTML = `${targetName}<span class="blend-hint">${levelData.recipeSize}-mix</span>`;
 
-  function absorb(o) {
-    centerHistory.push({ color: o.color.slice(), mass: o.mass });
-    center.color = window.Color.mix(center.color, center.mass, o.color, o.mass);
-    center.mass += o.mass;
-    center.squashImpulse = Math.min(0.6, 0.25 + 0.1 * o.mass);
-    ripples.push({
-      x: o.x,
-      y: o.y,
-      born: performance.now(),
-      life: 460,
-      color: o.color.slice(),
-      startR: o.radius * 1.0,
-      endR: o.radius * 3.2,
-    });
-    o.alive = false;
-  }
-
-  function performPullOut(releaseX, releaseY, vx, vy) {
-    if (!centerHistory.length) return;
-    const last = centerHistory.pop();
-    center.color = window.Color.unmix(center.color, center.mass, last.color, last.mass);
-    center.mass = Math.max(CENTER_START_MASS, center.mass - last.mass);
-    center.squashImpulse = Math.min(0.6, 0.3);
-
-    // Spawn the extracted blob as a free orbiter at the release point.
-    const spawn = new window.Blob({
-      x: releaseX,
-      y: releaseY,
-      color: last.color,
-      radius: ORBITER_RADIUS,
-      mass: last.mass,
-      mode: 'free',
-      orbitRadius: Math.min(width, height) * 0.32,
-      orbitAngle: Math.atan2(releaseY - centerY, releaseX - centerX),
-      orbitSpeed: 0.2,
-      wobbleAmp: 6,
-      wobbleFreq: 0.8,
-      wobblePhase: Math.random() * Math.PI * 2,
-    });
-    spawn.vx = vx;
-    spawn.vy = vy;
-    orbiters.push(spawn);
-
-    scoreState.notePull();
-    refreshHud();
-  }
-
-  function checkSolved() {
-    if (state !== 'playing') return;
-    const d = window.Color.distance(center.color, target.color);
-    if (d < WIN_TOLERANCE) {
-      onSolved();
+    if (level === 1 && !firstPourDone) {
+      hintToast.classList.remove('hidden');
+    } else {
+      hintToast.classList.add('hidden');
     }
-  }
 
-  function onSolved() {
-    state = 'celebrating';
-    celebrationStartMs = performance.now();
-
-    const result = scoreState.onSolve();
     refreshHud();
-
-    // Particle burst in the matched color.
-    particles.burst(centerX, centerY, target.color, 36);
-    // Big celebration ripple.
-    ripples.push({
-      x: centerX,
-      y: centerY,
-      born: performance.now(),
-      life: 900,
-      color: target.color.slice(),
-      startR: center.radius * 0.9,
-      endR: center.radius * 4.0,
-    });
-
-    showScorePopup(result);
+    updateMatchMeter();
   }
 
-  function showScorePopup(result) {
-    const streakBit = result.oneShot && result.streakLevel > 1
-      ? `  <span style="opacity:0.85;font-size:0.7em;">streak ×${result.streakLevel}</span>`
-      : '';
-    scorePopupEl.innerHTML = `+${result.award.toLocaleString()}${streakBit}`;
-    scorePopupEl.classList.remove('show');
-    scorePopupEl.classList.remove('hidden');
-    // Force reflow so the animation restarts even on rapid solves.
-    void scorePopupEl.offsetWidth;
-    scorePopupEl.classList.add('show');
-    window.setTimeout(() => {
-      scorePopupEl.classList.remove('show');
-      scorePopupEl.classList.add('hidden');
-    }, SCORE_POPUP_MS);
+  // --- Pour mechanics ---
+  function applyPourAmount(pig, dm) {
+    if (dm <= 0) return;
+    well.color = C.mix(well.color, well.mass, pig.color, dm);
+    well.mass += dm;
+    pig.reserve = Math.max(0, pig.reserve - dm);
+    pig.mass = pig.reserve;
+    totalPoured += dm;
+    well.squashImpulse = Math.min(0.45, well.squashImpulse + dm * 0.5);
   }
 
+  function onPourStart(pig) {
+    if (state !== 'playing' || pig.reserve <= 0.0001) return;
+    pouring = { pigment: pig, chunk: { id: pig.id, color: pig.color.slice(), mass: 0 }, elapsed: 0 };
+  }
+
+  function onPourEnd(pig) {
+    if (!pouring || pouring.pigment !== pig) return;
+    // A brief tap should still register a small, usable amount.
+    if (pouring.chunk.mass < MIN_POUR && pig.reserve > 0.0001) {
+      const topUp = Math.min(MIN_POUR - pouring.chunk.mass, pig.reserve);
+      applyPourAmount(pig, topUp);
+      pouring.chunk.mass += topUp;
+    }
+    if (pouring.chunk.mass > 0) {
+      pourHistory.push(pouring.chunk);
+      if (!firstPourDone) {
+        firstPourDone = true;
+        hintToast.classList.add('hidden');
+      }
+      ripples.push(makeRipple(well.x, well.y, well.radius, well.color, 420));
+    }
+    pouring = null;
+    checkSolve();
+    refreshHud();
+    updateMatchMeter();
+  }
+
+  function scrape() {
+    if (state !== 'playing' || !pourHistory.length || undosLeft <= 0) return;
+    const chunk = pourHistory.pop();
+    well.color = C.unmix(well.color, well.mass, chunk.color, chunk.mass);
+    well.mass = Math.max(0, well.mass - chunk.mass);
+    if (well.mass < 0.0005) well.mass = 0;
+    const pig = pigments.find((p) => p.id === chunk.id);
+    if (pig) {
+      pig.reserve = Math.min(pig.capacity, pig.reserve + chunk.mass);
+      pig.mass = pig.reserve;
+    }
+    wastedMass += chunk.mass;
+    undosLeft--;
+    undoCount++;
+    well.squashImpulse = 0.4;
+    ripples.push(makeRipple(well.x, well.y, well.radius, chunk.color, 380));
+    refreshHud();
+    updateMatchMeter();
+  }
+
+  function wash() {
+    if (state !== 'playing') return;
+    well.color = [0, 0, 0];
+    well.mass = 0;
+    for (const p of pigments) { p.reserve = p.capacity; p.mass = p.reserve; }
+    pourHistory = [];
+    undosLeft = levelData.undos;
+    washCount++;
+    pouring = null;
+    scoreState.breakStreak();
+    well.squashImpulse = 0.5;
+    ripples.push(makeRipple(well.x, well.y, well.radius * 1.3, [0.4, 0.5, 0.7], 520));
+    refreshHud();
+    updateMatchMeter();
+  }
+
+  function checkSolve() {
+    if (state !== 'playing' || well.mass <= 0) return;
+    const dist = C.distance(well.color, target);
+    if (dist < tolerance) onSolved(dist);
+  }
+
+  function onSolved(dist) {
+    state = 'solved';
+    solveTimer = 0;
+
+    const distRatio = Math.min(1, dist / tolerance);
+    const scrapesUsed = undoCount + washCount * 2;
+    const wasteFrac = Math.min(1, wastedMass / Math.max(0.001, totalPoured));
+    const result = scoreState.onSolve({ distRatio, scrapesUsed, wasteFrac });
+
+    particles.burst(well.x, well.y, target, 42);
+    ripples.push(makeRipple(well.x, well.y, well.radius * 0.9, target, 900, well.radius * 4.2));
+
+    refreshHud();
+    window.setTimeout(() => showOverlay(result), OVERLAY_DELAY_MS);
+  }
+
+  function showOverlay(result) {
+    overlayStars.innerHTML = [0, 1, 2]
+      .map((i) => `<span class="star${i < result.stars ? ' on' : ''}">&#9733;</span>`)
+      .join('');
+    overlayTitle.textContent = result.stars === 3 ? 'Bullseye!' : result.stars === 2 ? 'Matched!' : 'Close enough';
+    overlaySubtitle.textContent = `You mixed ${targetName}.`;
+    overlayAward.textContent = `+${result.award.toLocaleString()}`;
+    const fmt = (m) => `×${m.toFixed(2)}`;
+    overlayBreakdown.innerHTML =
+      `<span>Accuracy <b>${fmt(result.accuracy)}</b></span>` +
+      `<span>Efficiency <b>${fmt(result.efficiency)}</b></span>` +
+      `<span>Speed <b>${fmt(result.speed)}</b></span>` +
+      (result.streakLevel > 0 ? `<span>Streak <b>${fmt(result.streak)}</b></span>` : '');
+    overlay.classList.remove('hidden');
+  }
+
+  function nextLevel() {
+    loadLevel(levelData.level + 1);
+  }
+
+  // --- HUD / meter ---
   function refreshHud() {
+    levelValueEl.textContent = String(levelData ? levelData.level : 1);
     scoreValueEl.textContent = scoreState.score.toLocaleString();
     bestValueEl.textContent = scoreState.bestScore.toLocaleString();
     if (scoreState.streakLevel > 0) {
@@ -250,318 +291,258 @@
     } else {
       streakChipEl.classList.add('hidden');
     }
+    scrapeCountEl.textContent = String(undosLeft);
+    scrapeBtn.disabled = state !== 'playing' || undosLeft <= 0 || pourHistory.length === 0;
+    washBtn.disabled = state !== 'playing' || (well && well.mass <= 0);
+  }
+
+  function matchColorFor(pct, matched) {
+    if (matched) return '#ffd45e';
+    if (pct >= 88) return '#57c98a';
+    if (pct >= 72) return '#9fd24f';
+    if (pct >= 50) return '#e0b84f';
+    return '#e0556b';
+  }
+
+  function currentMatch() {
+    if (!well || well.mass <= 0.0005) return { pct: 0, matched: false, dist: 1 };
+    const dist = C.distance(well.color, target);
+    const pct = Math.max(0, Math.min(100, Math.round(100 * (1 - dist / MATCH_DIST_MAX))));
+    return { pct, matched: dist < tolerance, dist };
+  }
+
+  function updateMatchMeter() {
+    const m = currentMatch();
+    matchFillEl.style.width = m.pct + '%';
+    const col = matchColorFor(m.pct, m.matched);
+    matchFillEl.style.backgroundColor = col;
+    matchPctEl.textContent = m.matched ? 'MATCH' : m.pct + '%';
+    matchPctEl.classList.toggle('matched', m.matched);
+  }
+
+  function makeRipple(x, y, startR, color, life, endR) {
+    return { x, y, born: performance.now(), life: life || 440, color: color.slice(),
+             startR: startR * 0.9, endR: endR || startR * 2.6 };
   }
 
   // --- Loop ---
-
   let lastT = performance.now();
   function frame(now) {
     const dt = Math.min(0.05, (now - lastT) / 1000);
     lastT = now;
-    const t = now / 1000;
-
-    update(dt, t, now);
-    render(t, now);
-
+    update(dt, now / 1000, now);
+    render(now / 1000, now);
     requestAnimationFrame(frame);
   }
 
   function update(dt, t, nowMs) {
     const intensity = window.Score.intensityFromStreak(scoreState.streakLevel);
 
-    // Center jiggles harder while being pulled, plus baseline streak intensity.
-    center.intensity = Math.max(intensity, pulling ? 0.7 : 0);
-    center.tickAnim(dt);
+    // Well jiggle.
+    well.intensity = Math.max(intensity, pouring ? 0.5 : 0);
+    well.tickAnim(dt);
 
-    for (const o of orbiters) {
-      if (!o.alive) continue;
-      o.intensity = intensity * 0.85;
-      o.tickAnim(dt);
-      if (o.mode === 'orbit') {
-        o.updateOrbit(dt, centerX, centerY, t);
-      } else if (o.mode === 'grabbed') {
-        // Spring toward the pointer target. Drives blob velocity, which the
-        // stretch deformation in sampleRadii reads — so the faster you drag,
-        // the more the blob elongates.
-        const ax = (o.targetX - o.x) * GRAB_STIFFNESS - o.vx * GRAB_DAMPING;
-        const ay = (o.targetY - o.y) * GRAB_STIFFNESS - o.vy * GRAB_DAMPING;
-        o.vx += ax * dt;
-        o.vy += ay * dt;
-        o.x += o.vx * dt;
-        o.y += o.vy * dt;
-      } else if (o.mode === 'free') {
-        // Radial spring toward the orbit ring + a tangential bias once near
-        // the ring. Free blobs that aren't violently flicked end up settling
-        // into orbital motion rather than drifting back into the center.
-        const ringR = ringRadius();
-        const dx0 = o.x - center.x;
-        const dy0 = o.y - center.y;
-        const dist0 = Math.hypot(dx0, dy0) || 0.0001;
-        const radialErr = dist0 - ringR;
-        const ux = dx0 / dist0;
-        const uy = dy0 / dist0;
-        // Spring force pulling toward d == ringR (push out if inside, pull in if outside).
-        const springAx = -ux * radialErr * RING_STIFFNESS;
-        const springAy = -uy * radialErr * RING_STIFFNESS;
-        o.vx += springAx * dt;
-        o.vy += springAy * dt;
-        // When near the ring, encourage continued tangential motion in
-        // whichever direction the blob is already going. Tiny effect, but
-        // it keeps a settled blob orbiting instead of just floating.
-        if (Math.abs(radialErr) < ringR * 0.35) {
-          const tx = -uy;
-          const ty = ux;
-          const tProj = o.vx * tx + o.vy * ty;
-          const sign = tProj >= 0 ? 1 : -1;
-          o.vx += tx * sign * RING_TANGENT_BIAS * dt;
-          o.vy += ty * sign * RING_TANGENT_BIAS * dt;
+    // Active pour.
+    if (pouring && state === 'playing') {
+      const pig = pouring.pigment;
+      if (pig.reserve > 0.0001) {
+        pouring.elapsed += dt;
+        // Ease-in so quick taps stay gentle; full flow after ~0.18s.
+        const ramp = Math.min(1, 0.35 + pouring.elapsed / 0.18 * 0.65);
+        const dm = Math.min(pig.reserve, POUR_RATE * ramp * dt);
+        applyPourAmount(pig, dm);
+        pouring.chunk.mass += dm;
+        updateMatchMeter();
+
+        // Stream droplets falling into the well.
+        pourDropAccum += dt;
+        const interval = 0.045;
+        while (pourDropAccum >= interval) {
+          pourDropAccum -= interval;
+          particles.spawnPourDroplet(pig.x, pig.y + pig.radius * 0.5, well.x, well.y - well.radius * 0.3, pig.color);
         }
-
-        o.updateFree(dt);
-
-        const r = o.radius;
-        const restitution = 0.78;
-        if (o.x - r < 0) { o.x = r; o.vx = Math.abs(o.vx) * restitution; }
-        if (o.x + r > width) { o.x = width - r; o.vx = -Math.abs(o.vx) * restitution; }
-        if (o.y - r < 0) { o.y = r; o.vy = Math.abs(o.vy) * restitution; }
-        if (o.y + r > height) { o.y = height - r; o.vy = -Math.abs(o.vy) * restitution; }
-
-        const dx = o.x - center.x;
-        const dy = o.y - center.y;
-        const dist = Math.hypot(dx, dy);
-        // Inward radial speed. Positive = moving toward center.
-        const inwardSpeed = dist > 0 ? -(o.vx * dx + o.vy * dy) / dist : 0;
-        const inAbsorbZone = dist < center.radius + o.radius * 0.4;
-        if (
-          state === 'playing'
-          && inAbsorbZone
-          && inwardSpeed > ABSORB_INWARD_SPEED
-        ) {
-          absorb(o);
-        } else if (inAbsorbZone) {
-          // Drifting blob entered the absorb zone but isn't flicked hard
-          // enough — give it an outward push so it doesn't get stuck
-          // grinding against the center.
-          const push = 180;
-          o.vx += ux * push * dt;
-          o.vy += uy * push * dt;
-        }
-      }
-
-      // Paint drips off the trailing edge of fast-moving blobs (held or free).
-      if ((o.mode === 'grabbed' || o.mode === 'free') && state === 'playing') {
-        const speed = Math.hypot(o.vx, o.vy);
-        if (speed > DRIP_SPEED_THRESHOLD) {
-          const rate = (speed - DRIP_SPEED_THRESHOLD) / 130;
-          if (Math.random() < rate * dt) {
-            const va = Math.atan2(o.vy, o.vx);
-            const tx = o.x - Math.cos(va) * o.radius * 1.25;
-            const ty = o.y - Math.sin(va) * o.radius * 1.25;
-            particles.spawnDrip(tx, ty, o.vx, o.vy, o.color);
-          }
-        }
+      } else {
+        // Ran dry mid-pour.
+        onPourEnd(pig);
       }
     }
 
-    const before = orbiters.length;
-    orbiters = orbiters.filter((o) => o.alive);
-    if (before !== orbiters.length) checkSolved();
+    // Pigment idle bob + jiggle.
+    for (const p of pigments) {
+      p.mass = p.reserve;
+      p.intensity = intensity * 0.6;
+      p.tickAnim(dt);
+      const bob = Math.sin(t * p.bobSpeed + p.bobPhase) * 3;
+      p.x = p.homeX;
+      p.y = p.homeY + bob;
+    }
 
-    // Ambient particles around active blobs, scaled by streak intensity.
-    if (intensity > 0) {
-      const sources = [
-        { x: center.x, y: center.y, radius: center.radius, color: center.color, rate: 1 + 4 * intensity },
-      ];
-      for (const o of orbiters) {
-        if (!o.alive || o.mode !== 'orbit') continue;
-        sources.push({ x: o.x, y: o.y, radius: o.radius, color: o.color, rate: 0.3 + 1.6 * intensity });
-      }
-      particles.emitAmbient(dt, sources);
+    // Ambient sparkle around the well on a hot streak.
+    if (intensity > 0 && well.mass > 0) {
+      particles.emitAmbient(dt, [{ x: well.x, y: well.y, radius: well.radius, color: well.color, rate: 1 + 5 * intensity }]);
     }
     particles.update(dt);
 
-    // Celebration auto-advance.
-    if (state === 'celebrating' && nowMs - celebrationStartMs >= CELEBRATION_MS) {
-      buildPuzzle();
-    }
+    if (state === 'solved') solveTimer += dt;
+  }
+
+  function wellRadius() {
+    if (!well || well.mass <= 0) return WELL_BASE_RADIUS * 0.62;
+    return Math.min(WELL_MAX_RADIUS, well.radius);
   }
 
   function render(t, nowMs) {
     ctx2d.clearRect(0, 0, width, height);
 
-    const intensity = window.Score.intensityFromStreak(scoreState.streakLevel);
+    const wr = wellRadius();
+    const m = currentMatch();
 
-    // Streak halo behind the center.
-    if (intensity > 0) {
-      ctx2d.save();
-      const haloR = center.radius * (1.7 + 0.4 * intensity);
-      const grad = ctx2d.createRadialGradient(center.x, center.y, center.radius * 0.6, center.x, center.y, haloR);
-      const rgb = window.Color.rybToRgb(center.color);
-      grad.addColorStop(0, `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${0.18 * intensity})`);
-      grad.addColorStop(1, `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0)`);
-      ctx2d.fillStyle = grad;
-      ctx2d.beginPath();
-      ctx2d.arc(center.x, center.y, haloR, 0, Math.PI * 2);
-      ctx2d.fill();
-      ctx2d.restore();
+    // Background tint that drifts toward the current mix.
+    if (well.mass > 0) {
+      const rgb = C.rybToRgb(well.color);
+      const g = ctx2d.createRadialGradient(centerX, wellY, wr * 0.5, centerX, wellY, Math.max(width, height) * 0.7);
+      g.addColorStop(0, `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.10)`);
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx2d.fillStyle = g;
+      ctx2d.fillRect(0, 0, width, height);
     }
 
-    // Faint goal ring at center.
-    ctx2d.save();
-    ctx2d.globalAlpha = 0.07;
-    ctx2d.strokeStyle = '#ffffff';
-    ctx2d.lineWidth = 1;
-    ctx2d.setLineDash([5, 7]);
-    ctx2d.beginPath();
-    ctx2d.arc(centerX, centerY, center.radius * 1.45, 0, Math.PI * 2);
-    ctx2d.stroke();
-    ctx2d.restore();
+    // Target reference ring (outer) so you can eyeball well vs target.
+    drawRing(centerX, wellY, wr + 36, 5, C.rybToCss(target), 0.5);
 
-    center.draw(ctx2d, t);
+    // Match meter ring (arc grows with closeness).
+    drawMatchRing(centerX, wellY, wr + 20, m);
 
-    for (const o of orbiters) {
-      if (!o.alive) continue;
-      o.draw(ctx2d, t);
+    // Empty vessel hint when the well has no paint.
+    if (well.mass <= 0) {
+      drawRing(centerX, wellY, wr, 2, 'rgba(255,255,255,0.18)', 1, [5, 7]);
+    } else {
+      well.draw(ctx2d, t);
     }
 
-    // Pulling ghost: a stretchy "string" from center to pointer, in the
-    // color of the next-to-pop absorbed blob, with a small ghost disk.
-    if (pulling) {
-      const dx = pulling.x - center.x;
-      const dy = pulling.y - center.y;
-      const dist = Math.hypot(dx, dy);
-      const ghostX = pulling.x;
-      const ghostY = pulling.y;
-      const rgb = window.Color.rybToRgb(pulling.color);
-      const css = window.Color.rgbToCss(rgb);
-
-      // String
-      ctx2d.save();
-      ctx2d.strokeStyle = css;
-      ctx2d.globalAlpha = Math.min(1, dist / 80);
-      ctx2d.lineWidth = 6 - Math.min(4, dist / 40);
-      ctx2d.lineCap = 'round';
-      ctx2d.beginPath();
-      ctx2d.moveTo(center.x, center.y);
-      ctx2d.quadraticCurveTo(
-        (center.x + ghostX) / 2 + dy * 0.05,
-        (center.y + ghostY) / 2 - dx * 0.05,
-        ghostX, ghostY
-      );
-      ctx2d.stroke();
-      ctx2d.restore();
-
-      // Ghost disk
-      ctx2d.save();
-      ctx2d.shadowColor = 'rgba(0, 0, 0, 0.4)';
-      ctx2d.shadowBlur = 14;
-      ctx2d.shadowOffsetY = 4;
-      ctx2d.fillStyle = css;
-      ctx2d.globalAlpha = 0.92;
-      ctx2d.beginPath();
-      ctx2d.arc(ghostX, ghostY, ORBITER_RADIUS * 0.9, 0, Math.PI * 2);
-      ctx2d.fill();
-      ctx2d.restore();
-
-      // Threshold ring hint.
-      if (dist < PULLOUT_THRESHOLD) {
-        ctx2d.save();
-        ctx2d.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-        ctx2d.lineWidth = 1.5;
-        ctx2d.setLineDash([3, 4]);
-        ctx2d.beginPath();
-        ctx2d.arc(center.x, center.y, PULLOUT_THRESHOLD, 0, Math.PI * 2);
-        ctx2d.stroke();
-        ctx2d.restore();
-      }
+    // Pour stream.
+    if (pouring && pouring.pigment.reserve > 0.0001) {
+      drawPourStream(pouring.pigment, t);
     }
 
-    // Particles (additive).
+    // Pigment jars.
+    for (const p of pigments) {
+      drawJar(p, t);
+    }
+
     particles.draw(ctx2d);
 
-    // Ripples on absorption + celebration.
+    // Ripples.
     if (ripples.length) {
       ctx2d.save();
-      const stillAlive = [];
+      const alive = [];
       for (const r of ripples) {
         const age = (nowMs - r.born) / r.life;
         if (age >= 1) continue;
         const eased = 1 - Math.pow(1 - age, 2);
         const radius = r.startR + (r.endR - r.startR) * eased;
-        ctx2d.globalAlpha = 0.55 * (1 - age);
-        ctx2d.strokeStyle = window.Color.rybToCss(r.color);
+        ctx2d.globalAlpha = 0.5 * (1 - age);
+        ctx2d.strokeStyle = C.rybToCss(r.color);
         ctx2d.lineWidth = 3 * (1 - age) + 1;
         ctx2d.beginPath();
         ctx2d.arc(r.x, r.y, radius, 0, Math.PI * 2);
         ctx2d.stroke();
-        stillAlive.push(r);
+        alive.push(r);
       }
-      ripples = stillAlive;
+      ripples = alive;
       ctx2d.restore();
     }
-
-    targetSwatch.style.backgroundColor = window.Color.rybToCss(target.color);
   }
 
-  // --- Input wiring ---
+  // --- Render helpers ---
+  function drawRing(x, y, radius, lineWidth, stroke, alpha, dash) {
+    ctx2d.save();
+    ctx2d.globalAlpha = alpha == null ? 1 : alpha;
+    ctx2d.strokeStyle = stroke;
+    ctx2d.lineWidth = lineWidth;
+    if (dash) ctx2d.setLineDash(dash);
+    ctx2d.beginPath();
+    ctx2d.arc(x, y, radius, 0, Math.PI * 2);
+    ctx2d.stroke();
+    ctx2d.restore();
+  }
 
-  const input = window.Input.attachInput(canvas, {
-    getOrbiters: () => orbiters,
-    getCenter: () => center,
-    canPullCenter: () => state === 'playing' && centerHistory.length > 0,
-    onGrab: ({ kind, x, y }) => {
-      if (kind === 'center' && centerHistory.length > 0) {
-        const last = centerHistory[centerHistory.length - 1];
-        pulling = { startX: x, startY: y, x, y, color: last.color, mass: last.mass };
-      }
-    },
-    onMove: ({ kind, x, y }) => {
-      if (kind === 'center' && pulling) {
-        pulling.x = x;
-        pulling.y = y;
-      }
-    },
-    onRelease: ({ kind, blob, vx, vy, releaseX, releaseY, dragDist }) => {
-      if (state !== 'playing') {
-        if (kind === 'orbiter' && blob) blob.mode = 'orbit';
-        pulling = null;
-        return;
-      }
+  function drawMatchRing(x, y, radius, m) {
+    // Faint full track.
+    drawRing(x, y, radius, 4, 'rgba(255,255,255,0.08)', 1);
+    if (well.mass <= 0) return;
+    const frac = Math.max(0.02, m.pct / 100);
+    const col = matchColorFor(m.pct, m.matched);
+    ctx2d.save();
+    ctx2d.strokeStyle = col;
+    ctx2d.lineWidth = m.matched ? 6 : 4;
+    ctx2d.lineCap = 'round';
+    if (m.matched) {
+      ctx2d.shadowColor = col;
+      ctx2d.shadowBlur = 18;
+    }
+    ctx2d.globalAlpha = 0.95;
+    const start = -Math.PI / 2;
+    ctx2d.beginPath();
+    ctx2d.arc(x, y, radius, start, start + Math.PI * 2 * frac);
+    ctx2d.stroke();
+    ctx2d.restore();
+  }
 
-      if (kind === 'orbiter') {
-        blob.mode = 'free';
-        blob.vx = vx;
-        blob.vy = vy;
-        return;
-      }
+  function drawJar(p, t) {
+    if (p.reserve <= 0.0001) {
+      // Empty jar: just a faint socket so the player sees it's spent.
+      drawRing(p.x, p.y, PIG_BASE_RADIUS * 0.7, 1.5, 'rgba(255,255,255,0.10)', 1, [3, 4]);
+      return;
+    }
+    // Capacity ghost ring behind the (shrinking) jar.
+    const capR = PIG_BASE_RADIUS * Math.cbrt(p.capacity);
+    drawRing(p.x, p.y, capR + 4, 1.5, 'rgba(255,255,255,0.08)', 1);
+    p.draw(ctx2d, t);
+    // Rim light so dark/black jars stay visible on the dark field.
+    drawRing(p.x, p.y, p.radius * 1.06, 1.5, 'rgba(255,255,255,0.16)', 1);
+    if (pouring && pouring.pigment === p) {
+      drawRing(p.x, p.y, p.radius * 1.18, 2, 'rgba(255,255,255,0.55)', 1);
+    }
+  }
 
-      if (kind === 'center') {
-        if (dragDist >= PULLOUT_THRESHOLD) {
-          performPullOut(releaseX, releaseY, vx, vy);
-        }
-        pulling = null;
-      }
-    },
+  function drawPourStream(pig, t) {
+    const sx = pig.x;
+    const sy = pig.y + pig.radius * 0.4;
+    const ex = well.x;
+    const ey = well.y - well.radius * 0.2;
+    const midX = (sx + ex) / 2 + Math.sin(t * 7) * 5;
+    const midY = (sy + ey) / 2 + 18;
+    ctx2d.save();
+    ctx2d.strokeStyle = C.rybToCss(pig.color);
+    ctx2d.globalAlpha = 0.8;
+    ctx2d.lineWidth = 6;
+    ctx2d.lineCap = 'round';
+    ctx2d.beginPath();
+    ctx2d.moveTo(sx, sy);
+    ctx2d.quadraticCurveTo(midX, midY, ex, ey);
+    ctx2d.stroke();
+    ctx2d.restore();
+  }
+
+  // --- Wiring ---
+  window.Input.attachInput(canvas, {
+    getPigments: () => pigments,
+    isPlaying: () => state === 'playing',
+    onPourStart,
+    onPourEnd,
   });
 
-  resetBtn.addEventListener('click', () => {
-    input.cancel();
-    pulling = null;
-    scoreState.notePlayerReset();
-    refreshHud();
-    buildPuzzle();
-  });
+  scrapeBtn.addEventListener('click', scrape);
+  washBtn.addEventListener('click', wash);
+  overlayBtn.addEventListener('click', nextLevel);
 
   window.addEventListener('resize', resize);
   window.addEventListener('orientationchange', resize);
-  if (window.visualViewport) {
-    window.visualViewport.addEventListener('resize', resize);
-  }
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', resize);
 
   // --- Boot ---
-
   resize();
-  buildPuzzle();
-  refreshHud();
+  loadLevel(1);
   requestAnimationFrame((t) => { lastT = t; frame(t); });
 })();

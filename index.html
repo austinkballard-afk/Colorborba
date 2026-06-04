@@ -2,51 +2,68 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0e1118" />
   <title>Colorborba</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header class="hud">
-    <div class="hud-row hud-left">
-      <div class="target">
-        <span class="target-label">Match</span>
-        <span class="target-swatch" id="target-swatch" aria-label="Target color"></span>
-        <span class="target-count" id="target-count" aria-label="Blobs needed">3</span>
-      </div>
-      <div class="chip score-chip" id="score-chip">
-        <span class="chip-label">Score</span>
-        <span class="chip-value" id="score-value">0</span>
-      </div>
+    <div class="hud-row">
+      <div class="chip"><span class="chip-label">Level</span><span class="chip-value" id="level-value">1</span></div>
+      <div class="chip"><span class="chip-label">Score</span><span class="chip-value" id="score-value">0</span></div>
       <div class="chip streak-chip hidden" id="streak-chip">
         <span class="streak-flame" aria-hidden="true">&#x1F525;</span>
         <span class="chip-value" id="streak-value">&times;1</span>
       </div>
-    </div>
-    <div class="hud-row hud-right">
-      <div class="chip best-chip" id="best-chip">
-        <span class="chip-label">Best</span>
-        <span class="chip-value" id="best-value">0</span>
-      </div>
-      <button id="reset-btn" class="reset-btn" type="button" aria-label="New puzzle">&#x21bb;</button>
+      <div class="chip best-chip"><span class="chip-label">Best</span><span class="chip-value" id="best-value">0</span></div>
     </div>
   </header>
 
+  <!-- Target + live match readout -->
+  <section class="target-panel" id="target-panel">
+    <span class="target-swatch" id="target-swatch" aria-label="Target color"></span>
+    <div class="target-meta">
+      <div class="target-name" id="target-name">&mdash;</div>
+      <div class="match-track" aria-hidden="true">
+        <div class="match-fill" id="match-fill"></div>
+      </div>
+    </div>
+    <span class="match-pct" id="match-pct">0%</span>
+  </section>
+
   <canvas id="game" class="game"></canvas>
 
-  <div id="score-popup" class="score-popup hidden" aria-hidden="true"></div>
+  <!-- Bottom controls -->
+  <div class="controls">
+    <button class="ctrl-btn" id="scrape-btn" type="button">
+      <span class="ctrl-icon">&#x21b6;</span>
+      <span class="ctrl-label">Scrape</span>
+      <span class="ctrl-badge" id="scrape-count">3</span>
+    </button>
+    <button class="ctrl-btn wash-btn" id="wash-btn" type="button">
+      <span class="ctrl-icon">&#x1F4A7;</span>
+      <span class="ctrl-label">Wash</span>
+    </button>
+  </div>
+
+  <div id="hint-toast" class="hint-toast hidden">Hold a jar to pour it in. Match the swatch up top.</div>
 
   <div id="overlay" class="overlay hidden" role="dialog" aria-modal="true">
     <div class="overlay-card">
-      <h1 id="overlay-title">Nice mix!</h1>
+      <div class="stars" id="overlay-stars" aria-hidden="true"></div>
+      <h1 id="overlay-title">Matched!</h1>
       <p id="overlay-subtitle"></p>
-      <button id="overlay-btn" class="primary-btn" type="button">Play again</button>
+      <div class="award" id="overlay-award">+0</div>
+      <div class="breakdown" id="overlay-breakdown"></div>
+      <button id="overlay-btn" class="primary-btn" type="button">Next color &rarr;</button>
     </div>
   </div>
 
   <script src="src/color.js"></script>
+  <script src="src/namer.js"></script>
+  <script src="src/level.js"></script>
   <script src="src/blob.js"></script>
-  <script src="src/puzzle.js"></script>
   <script src="src/score.js"></script>
   <script src="src/particles.js"></script>
   <script src="src/input.js"></script>
