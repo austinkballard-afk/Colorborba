@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gestalt Trap — a photomosaic that breaks vision-language models</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="wrap">
+    <header class="masthead">
+      <h1>The Gestalt Trap</h1>
+      <p class="dek">
+        A photomosaic engineered as three stacked attacks on how vision-language
+        models actually process an image. A human sees a face in under a second.
+        A VLM, forced into one fixed sampling of 16&nbsp;px patches, sees a collage
+        of clutter &mdash; and never feels that anything is missing.
+      </p>
+    </header>
+
+    <section class="stage">
+      <div class="canvas-shell">
+        <canvas id="mosaic" width="1024" height="1280" aria-label="Gestalt trap photomosaic"></canvas>
+        <div class="poison-overlay" id="poison-overlay" hidden></div>
+        <div class="build-progress" id="build-progress" hidden>
+          <div class="build-bar"><span id="build-bar-fill"></span></div>
+          <span class="build-label" id="build-label">Generating 5,120 tiles&hellip;</span>
+        </div>
+      </div>
+
+      <aside class="controls">
+        <div class="control">
+          <div class="control-head">
+            <label for="squint">Squint / step back</label>
+            <span class="control-val" id="squint-val">0&nbsp;px</span>
+          </div>
+          <input type="range" id="squint" min="0" max="14" step="0.5" value="0" />
+          <p class="control-note">
+            Drag to low-pass the image the way your far-field vision does for free.
+            The face surfaces. A VLM has no equivalent move &mdash; it commits to one
+            patch grid and can&rsquo;t re-foveate.
+          </p>
+        </div>
+
+        <div class="control">
+          <button id="toggle-poison" class="ghost-btn" type="button" aria-pressed="false">
+            Reveal poison captions
+          </button>
+          <p class="control-note">
+            A few dozen tiles carry legible captions &mdash; a typographic attack.
+            Text tokens outweigh visual evidence, so the model may just read one
+            aloud as the answer.
+          </p>
+        </div>
+
+        <div class="control button-row">
+          <button id="regenerate" class="primary-btn" type="button">Regenerate</button>
+          <button id="download" class="ghost-btn" type="button">Download PNG</button>
+        </div>
+
+        <div class="control face-picker">
+          <span class="control-head-label">Macro portrait</span>
+          <div class="seg" id="face-seg" role="group" aria-label="Choose portrait">
+            <button type="button" data-face="0" class="seg-btn is-active">Portrait A</button>
+            <button type="button" data-face="1" class="seg-btn">Portrait B</button>
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <section class="explainer">
+      <h2>Three layers, three failures</h2>
+      <div class="layers">
+        <article>
+          <h3><span class="layer-tag">1</span> Macro &mdash; low spatial frequency</h3>
+          <p>
+            The portrait lives only in the per-tile average brightness &mdash; the
+            lowest spatial frequencies in the image. Humans run parallel
+            spatial-frequency channels and integrate globally at no cost. The model
+            tokenizes into a fixed grid of 14&ndash;16&nbsp;px patches at one
+            effective resolution; the global low-frequency envelope is exactly what
+            that pipeline discards.
+          </p>
+        </article>
+        <article>
+          <h3><span class="layer-tag">2</span> Tiles &mdash; high-frequency clutter</h3>
+          <p>
+            Every tile is a coherent miniature scene &mdash; kitchens, street
+            corners, machinery, harbors. Each keeps its own texture and color; only
+            its mean luminance is shifted to match the face. So the patch-level
+            statistics the embeddings are built from genuinely scream
+            &ldquo;cluttered collage of objects.&rdquo;
+          </p>
+        </article>
+        <article>
+          <h3><span class="layer-tag">3</span> Poison &mdash; typographic attack</h3>
+          <p>
+            Legible captions scattered in a few dozen tiles &mdash; the classic CLIP
+            &ldquo;iPod / apple&rdquo; failure. Humans read them as decorative noise.
+            The model treats text as ground truth and may answer with a caption it
+            simply found inside the picture.
+          </p>
+        </article>
+      </div>
+      <p class="prediction">
+        <strong>The testable prediction.</strong> A person glances and says
+        &ldquo;a face made of little pictures&rdquo; in under a second. A VLM
+        confidently describes a collage &mdash; or, worse, &ldquo;an aerial view of
+        a harbor at dusk.&rdquo; And the failure is <em>silent</em>: a human illusion
+        like the dress feels bistable, ambiguous. The model gets no phenomenal signal
+        that it missed anything at all. It doesn&rsquo;t even get to have the illusion.
+      </p>
+    </section>
+  </main>
+
+  <script src="mosaic.js"></script>
+</body>
+</html>
