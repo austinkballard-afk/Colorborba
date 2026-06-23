@@ -1,0 +1,943 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>THE SANDBOX</title>
+<style>
+  :root{
+    --bg:#06070d;
+    --panel:rgba(16,18,28,0.72);
+    --panel-solid:#12141f;
+    --line:rgba(255,255,255,0.08);
+    --text:#e6e8f0;
+    --dim:#8a8fa6;
+    --accent:#9fd0ff;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow:hidden;}
+  #stage-wrap{position:fixed;inset:0;}
+  canvas{position:absolute;inset:0;width:100%;height:100%;display:block;}
+  #bg{z-index:1;}
+  #game{z-index:2;cursor:crosshair;touch-action:none;}
+
+  /* ---- HUD narrative ---- */
+  #hud{position:fixed;top:0;left:0;right:0;z-index:5;padding:10px 14px;
+    display:flex;justify-content:space-between;align-items:flex-start;gap:10px;
+    pointer-events:none;}
+  #hud .title-block{pointer-events:none;}
+  #hud h1{margin:0;font-size:15px;letter-spacing:.32em;font-weight:700;
+    text-shadow:0 0 14px rgba(120,170,255,.25);}
+  #hud .subtitle{margin:2px 0 0;font-size:11px;color:var(--dim);max-width:60vw;
+    transition:color .6s,opacity .6s;min-height:14px;}
+  #hud .progress{pointer-events:auto;text-align:right;font-size:11px;color:var(--dim);}
+  #hud .progress b{color:var(--accent);font-size:13px;}
+  #hud .progress button{margin-top:6px;}
+
+  button{font-family:inherit;color:var(--text);background:var(--panel);
+    border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:11px;
+    cursor:pointer;backdrop-filter:blur(6px);transition:background .15s,border-color .15s,transform .05s;}
+  button:hover{background:rgba(40,44,62,.8);border-color:rgba(255,255,255,.18);}
+  button:active{transform:translateY(1px);}
+
+  /* ---- bottom toolbar ---- */
+  #toolbar{position:fixed;left:0;right:0;bottom:0;z-index:6;padding:8px 10px 10px;
+    background:linear-gradient(to top,rgba(6,7,13,.92),rgba(6,7,13,.55) 70%,transparent);
+    display:flex;flex-direction:column;gap:8px;}
+  #palette{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;}
+  .pal{display:flex;align-items:center;gap:6px;padding:5px 9px;border-radius:9px;
+    border:1px solid var(--line);background:var(--panel);font-size:11px;cursor:pointer;
+    transition:transform .05s,border-color .15s,box-shadow .15s;user-select:none;}
+  .pal:active{transform:translateY(1px);}
+  .pal .sw{width:13px;height:13px;border-radius:3px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.35);}
+  .pal.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent),0 0 16px rgba(120,170,255,.3);}
+  .pal.fresh{animation:pop .5s ease;}
+  @keyframes pop{0%{transform:scale(.4);opacity:0}60%{transform:scale(1.12)}100%{transform:scale(1)}}
+  #controls{display:flex;gap:8px;justify-content:center;align-items:center;flex-wrap:wrap;}
+  #controls label{font-size:11px;color:var(--dim);display:flex;align-items:center;gap:6px;}
+  input[type=range]{accent-color:var(--accent);}
+
+  /* ---- toasts ---- */
+  #toasts{position:fixed;left:50%;top:18%;transform:translateX(-50%);z-index:9;
+    display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;width:92vw;max-width:460px;}
+  .toast{background:var(--panel-solid);border:1px solid var(--line);border-radius:12px;
+    padding:11px 16px;text-align:center;box-shadow:0 10px 40px rgba(0,0,0,.55);
+    animation:toastIn .35s ease, toastOut .5s ease forwards;animation-delay:0s,3.4s;max-width:100%;}
+  .toast.big{animation-delay:0s,5.2s;}
+  .toast .tt{font-size:13px;font-weight:700;letter-spacing:.04em;}
+  .toast .ts{font-size:11px;color:var(--dim);margin-top:3px;}
+  .toast.big .tt{font-size:16px;color:#ffe7b0;text-shadow:0 0 18px rgba(255,200,120,.4);letter-spacing:.16em;}
+  @keyframes toastIn{from{opacity:0;transform:translateY(-10px) scale(.96)}to{opacity:1;transform:none}}
+  @keyframes toastOut{to{opacity:0;transform:translateY(-8px);visibility:hidden}}
+
+  /* ---- codex ---- */
+  #codex{position:fixed;top:0;right:0;bottom:0;width:min(340px,86vw);z-index:8;
+    background:var(--panel-solid);border-left:1px solid var(--line);
+    transform:translateX(100%);transition:transform .3s ease;display:flex;flex-direction:column;}
+  #codex.open{transform:none;box-shadow:-20px 0 60px rgba(0,0,0,.5);}
+  #codex header{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;
+    justify-content:space-between;align-items:center;}
+  #codex header h2{margin:0;font-size:13px;letter-spacing:.24em;}
+  #codex .clist{overflow-y:auto;padding:8px 12px 60px;flex:1;}
+  .cx{padding:9px 10px;border-radius:9px;margin-bottom:6px;border:1px solid transparent;
+    background:rgba(255,255,255,.02);}
+  .cx.done{border-color:rgba(140,200,255,.18);background:rgba(120,170,255,.06);}
+  .cx.secret.done{border-color:rgba(255,200,120,.25);background:rgba(255,200,120,.06);}
+  .cx .cn{font-size:12px;font-weight:700;}
+  .cx.locked .cn{color:var(--dim);font-weight:400;font-style:italic;}
+  .cx .cd{font-size:10.5px;color:var(--dim);margin-top:2px;line-height:1.4;}
+  .cx .badge{font-size:9px;color:#ffd9a0;letter-spacing:.1em;}
+  #codex footer{padding:10px 16px;border-top:1px solid var(--line);font-size:10px;color:var(--dim);
+    display:flex;justify-content:space-between;align-items:center;}
+  #codex footer a{color:var(--accent);cursor:pointer;text-decoration:underline;}
+  .hidden{display:none!important;}
+  #hint{position:fixed;bottom:108px;left:50%;transform:translateX(-50%);z-index:5;
+    font-size:11px;color:var(--dim);background:var(--panel);border:1px solid var(--line);
+    padding:6px 12px;border-radius:20px;pointer-events:none;opacity:0;transition:opacity .5s;}
+  #hint.show{opacity:1;}
+</style>
+</head>
+<body>
+<div id="stage-wrap">
+  <canvas id="bg"></canvas>
+  <canvas id="game"></canvas>
+</div>
+
+<div id="hud">
+  <div class="title-block">
+    <h1>THE&nbsp;SANDBOX</h1>
+    <p class="subtitle" id="subtitle">A box of sand. Drop things in. See what happens.</p>
+  </div>
+  <div class="progress">
+    <div><b id="disc-count">0</b> / <span id="disc-total">21</span> discovered</div>
+    <button id="codex-btn">CODEX</button>
+  </div>
+</div>
+
+<div id="hint"></div>
+
+<div id="toolbar">
+  <div id="palette"></div>
+  <div id="controls">
+    <label>brush <input id="brush" type="range" min="1" max="9" value="3" /></label>
+    <button id="pause-btn">⏸ pause</button>
+    <button id="clear-btn">clear</button>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<div id="codex">
+  <header>
+    <h2>CODEX&nbsp;OF&nbsp;REACTIONS</h2>
+    <button id="codex-close">close</button>
+  </header>
+  <div class="clist" id="codex-list"></div>
+  <footer>
+    <span>Each reaction is a memory it recovers.</span>
+    <a id="forget">forget all</a>
+  </footer>
+</div>
+
+<script>
+"use strict";
+(function(){
+/* =========================================================================
+   THE SANDBOX — a falling-sand toy with unorthodox reactions.
+   Discover reactions to slowly reveal what the sandbox really is.
+   ========================================================================= */
+
+// ---- element ids ----
+const EMPTY=0,WALL=1,SAND=2,WATER=3,FIRE=4,PLANT=5,OIL=6,ACID=7,ICE=8,
+      STEAM=9,LAVA=10,SALT=11,ASH=12,GLASS=13,SPORE=14,OBSIDIAN=15,CRYSTAL=16,
+      RUNE=17,VOID=18,AETHER=19,CORAL=20,LUMEN=21,GLITCH=22,BRINE=23,SMOKE=24;
+
+// states
+const STATIC=0,POWDER=1,LIQUID=2,GAS=3,FIRES=4,ENERGY=5;
+
+// element descriptors
+const DEF = {};
+function D(id,o){o.id=id;DEF[id]=o;return o;}
+D(EMPTY,   {name:'',        state:STATIC, c:[0,0,0]});
+D(WALL,    {name:'Stone',   label:'Stone', state:STATIC, c:[92,98,114], jit:14, paint:true, corr:true});
+D(SAND,    {name:'Sand',    label:'Sand',  state:POWDER, c:[214,190,128], jit:26, dens:8, paint:true, corr:true});
+D(WATER,   {name:'Water',   label:'Water', state:LIQUID, c:[58,120,224], jit:18, dens:5, paint:true});
+D(FIRE,    {name:'Fire',    label:'Fire',  state:FIRES,  c:[255,120,20], paint:true, flam:false});
+D(PLANT,   {name:'Plant',   label:'Plant', state:STATIC, c:[72,178,84], jit:30, paint:true, flam:true, ig:0.35, fuel:90, corr:true});
+D(OIL,     {name:'Oil',     label:'Oil',   state:LIQUID, c:[58,48,40], jit:10, dens:4, paint:true, flam:true, ig:0.6, fuel:130});
+D(ACID,    {name:'Acid',    label:'Acid',  state:LIQUID, c:[150,232,60], jit:18, dens:5, paint:true});
+D(ICE,     {name:'Ice',     label:'Ice',   state:STATIC, c:[176,222,242], jit:14, paint:true, corr:true});
+D(STEAM,   {name:'Steam',   label:'Steam', state:GAS,    c:[200,208,220], jit:14, corr:false});
+D(LAVA,    {name:'Lava',    label:'Lava',  state:LIQUID, c:[224,92,30], jit:30, dens:9, paint:true, hot:true});
+D(SALT,    {name:'Salt',    label:'Salt',  state:POWDER, c:[226,226,236], jit:14, dens:7, paint:true, corr:true});
+D(ASH,     {name:'Ash',     label:'Ash',   state:POWDER, c:[112,106,100], jit:22, dens:3, corr:true});
+D(GLASS,   {name:'Glass',   label:'Glass', state:STATIC, c:[176,208,224], jit:18, corr:true, clear:true});
+D(SPORE,   {name:'Spore',   label:'Spore', state:GAS,    c:[180,210,138], jit:22, flam:true, ig:0.45, fuel:40, corr:true});
+D(OBSIDIAN,{name:'Obsidian',label:'Obsidian',state:STATIC,c:[22,18,32], jit:8, corr:false, mirror:true});
+D(CRYSTAL, {name:'Crystal', label:'Crystal',state:STATIC, c:[150,212,232], jit:40, corr:true, clear:true});
+D(RUNE,    {name:'Rune',    label:'Rune',  state:STATIC, c:[244,200,120], corr:false, glow:true});
+D(VOID,    {name:'Void',    label:'Void',  state:STATIC, c:[6,5,10]});
+D(AETHER,  {name:'Aether',  label:'Aether',state:GAS,    c:[255,220,130], jit:30});
+D(CORAL,   {name:'Coral',   label:'Coral', state:STATIC, c:[232,108,150], jit:28, flam:true, ig:0.12, fuel:60, corr:true});
+D(LUMEN,   {name:'Light',   label:'Light', state:ENERGY, c:[255,250,210]});
+D(GLITCH,  {name:'Glitch',  label:'Glitch',state:STATIC, c:[255,0,200]});
+D(BRINE,   {name:'Brine',   state:LIQUID, c:[80,150,200], jit:16, dens:6});
+D(SMOKE,   {name:'Smoke',   state:GAS, c:[70,70,82], jit:16});
+
+const MAXID=25;
+const STATE=new Int8Array(MAXID), DENS=new Float32Array(MAXID),
+      FLAM=new Uint8Array(MAXID), CORR=new Uint8Array(MAXID),
+      HOT=new Uint8Array(MAXID), CLEAR=new Uint8Array(MAXID),
+      JIT=new Float32Array(MAXID);
+const CR=new Uint8Array(MAXID), CG=new Uint8Array(MAXID), CB=new Uint8Array(MAXID);
+for(const id in DEF){const d=DEF[id];
+  STATE[id]=d.state; DENS[id]=d.dens||0; FLAM[id]=d.flam?1:0; CORR[id]=d.corr?1:0;
+  HOT[id]=d.hot?1:0; CLEAR[id]=(d.clear||d.state===LIQUID||d.state===GAS||id==EMPTY)?1:0;
+  JIT[id]=d.jit||0; CR[id]=d.c[0]; CG[id]=d.c[1]; CB[id]=d.c[2];
+}
+function isHot(id){return id===FIRE||id===LAVA;}
+function isFlam(id){return FLAM[id]===1;}
+function isLight(id){return id===EMPTY||id===GLASS||id===WATER||id===ICE||id===BRINE||id===STEAM||id===CRYSTAL;}
+
+// ---- discoveries (the codex / the story spine) ----
+const DISC = [
+ {k:'burn',      n:'Combustion',     h:'Fire wants company.'},
+ {k:'boil',      n:'Boiling Point',  h:'Heat, meet water.',                     u:STEAM},
+ {k:'ash',       n:'Cinders',        h:'What is left when the flame is done.',  u:ASH},
+ {k:'glass',     n:'Vitrify',        h:'Sand, given enough fire.',              u:GLASS},
+ {k:'cool',      n:'Tempered Earth', h:'Molten rock, suddenly chilled.'},
+ {k:'mirror',    n:'Black Mirror',   h:'A rarer death for lava.',               u:OBSIDIAN, s:true},
+ {k:'grow',      n:'Photosynthesis', h:'Green things drink, and reach.'},
+ {k:'spore',     n:'Sporulation',    h:'Crowded life looks for new ground.',    u:SPORE},
+ {k:'germinate', n:'Germination',    h:'A spore finds open water.'},
+ {k:'freeze',    n:'Hard Frost',     h:'Still water near cold remembers ice.'},
+ {k:'melt',      n:'Thaw',           h:'Ice forgets itself.'},
+ {k:'brine',     n:'Brine',          h:'Salt, dissolved.'},
+ {k:'coral',     n:'Coral Bloom',    h:'Salt water touching the green.',        u:CORAL},
+ {k:'corrode',   n:'Corrosion',      h:'Acid is always hungry.'},
+ {k:'rune',      n:'The Buried Word',h:'Something is written beneath the stone.',u:RUNE, s:true},
+ {k:'focus',     n:'Focal Point',    h:'Glass bends a flame into a beam.',       u:LUMEN, s:true},
+ {k:'crystal',   n:'Crystal Garden', h:'Light, salt water, and patience.',       u:CRYSTAL, s:true},
+ {k:'ascend',    n:'Ascension',      h:'Light passes through the lattice and becomes... else.', u:AETHER, s:true},
+ {k:'void',      n:'The Hollow',     h:'Part of this place is simply missing.',  u:VOID, s:true},
+ {k:'glitch',    n:'Corruption',     h:'The emptiness, overfed.',                u:GLITCH, s:true},
+ {k:'witness',   n:'The Eye',        h:'It has been looking back the whole time.', s:true, fin:true},
+];
+const DISC_TOTAL = DISC.length;
+const discovered = new Set();
+let discCount = 0;
+let awake = false;
+let aetherAscended = 0;
+let voidHunger = 0;
+
+// ---- canvas / grid ----
+const bg = document.getElementById('bg'), bctx = bg.getContext('2d');
+const game = document.getElementById('game'), gctx = game.getContext('2d');
+let W, H, CELL, off, octx, cells, aux, sub, glow, moved;
+let frame = 0;
+const subCanvas = document.createElement('canvas');
+const sctx = subCanvas.getContext('2d', {willReadFrequently:true});
+
+function setup(){
+  const w = window.innerWidth, h = window.innerHeight;
+  CELL = Math.max(4, Math.round(Math.min(w,h)/150));
+  W = Math.floor(w/CELL); H = Math.floor(h/CELL);
+  bg.width=w; bg.height=h; game.width=w; game.height=h;
+  off = document.createElement('canvas'); off.width=W; off.height=H;
+  octx = off.getContext('2d'); octx.imageSmoothingEnabled=false;
+  gctx.imageSmoothingEnabled=false; bctx.imageSmoothingEnabled=false;
+  subCanvas.width=W; subCanvas.height=H;
+  cells=new Int16Array(W*H); aux=new Uint8Array(W*H);
+  sub=new Float32Array(W*H); glow=new Float32Array(W*H); moved=new Uint8Array(W*H);
+  imgData = octx.createImageData(W,H);
+  subImg = bctx.createImageData(W,H);
+  curSubMsg=null; renderSubstrate();
+  // a stone floor + walls so things settle
+  for(let x=0;x<W;x++){ setCell(idx(x,H-1),WALL); }
+}
+let imgData, subImg, curSubMsg;
+function idx(x,y){return y*W+x;}
+
+// ---- cell helpers ----
+function setCell(i,id,a){ cells[i]=id; aux[i]=a||0; moved[i]=1; }
+function swap(i,j){ const t=cells[i];cells[i]=cells[j];cells[j]=t;
+  const u=aux[i];aux[i]=aux[j];aux[j]=u; moved[i]=1;moved[j]=1; }
+
+// neighbour scans (no per-call allocation)
+function nbHas(x,y,id){
+  if(y>0   && cells[(y-1)*W+x]===id) return (y-1)*W+x;
+  if(y<H-1 && cells[(y+1)*W+x]===id) return (y+1)*W+x;
+  if(x>0   && cells[y*W+x-1]===id)   return y*W+x-1;
+  if(x<W-1 && cells[y*W+x+1]===id)   return y*W+x+1;
+  return -1;
+}
+function nbPred(x,y,fn){
+  if(y>0   && fn(cells[(y-1)*W+x])) return (y-1)*W+x;
+  if(y<H-1 && fn(cells[(y+1)*W+x])) return (y+1)*W+x;
+  if(x>0   && fn(cells[y*W+x-1]))   return y*W+x-1;
+  if(x<W-1 && fn(cells[y*W+x+1]))   return y*W+x+1;
+  return -1;
+}
+function nbCount(x,y,id){let n=0;
+  if(y>0   && cells[(y-1)*W+x]===id)n++;
+  if(y<H-1 && cells[(y+1)*W+x]===id)n++;
+  if(x>0   && cells[y*W+x-1]===id)n++;
+  if(x<W-1 && cells[y*W+x+1]===id)n++;
+  return n;
+}
+const scratch=new Int32Array(4);
+function emptyAround(x,y){ // random empty neighbour, biased to up/sides
+  let n=0;
+  if(y>0   && cells[(y-1)*W+x]===EMPTY) scratch[n++]=(y-1)*W+x;
+  if(x>0   && cells[y*W+x-1]===EMPTY)   scratch[n++]=y*W+x-1;
+  if(x<W-1 && cells[y*W+x+1]===EMPTY)   scratch[n++]=y*W+x+1;
+  if(y<H-1 && cells[(y+1)*W+x]===EMPTY) scratch[n++]=(y+1)*W+x;
+  return n? scratch[(Math.random()*n)|0] : -1;
+}
+function anyAround(x,y){
+  let n=0;
+  if(y>0)   scratch[n++]=(y-1)*W+x;
+  if(y<H-1) scratch[n++]=(y+1)*W+x;
+  if(x>0)   scratch[n++]=y*W+x-1;
+  if(x<W-1) scratch[n++]=y*W+x+1;
+  return n? scratch[(Math.random()*n)|0] : -1;
+}
+
+// awake: grains drift toward the cursor ("it reaches for you")
+let mGX=-1, mGY=-1;
+function biasDir(x,d){
+  if(!awake || mGX<0) return d;
+  if(Math.random()<0.22){ return mGX>x?1:(mGX<x?-1:d); }
+  return d;
+}
+
+// ---- movement primitives ----
+function powderInto(t){ return t===EMPTY||STATE[t]===LIQUID||STATE[t]===GAS; }
+function liquidInto(self,t){ return t===EMPTY||STATE[t]===GAS||(STATE[t]===LIQUID&&DENS[self]>DENS[t]); }
+function gasInto(t){ return t===EMPTY||STATE[t]===LIQUID; }
+
+function movePowder(x,y,i,id){
+  if(y<H-1){ const b=i+W; if(powderInto(cells[b])){ swap(i,b); return; } }
+  let d=Math.random()<0.5?1:-1; d=biasDir(x,d);
+  for(const dd of (Math.random()<0.5?[d,-d]:[-d,d])){
+    const nx=x+dd; if(nx<0||nx>=W||y>=H-1) continue;
+    const di=i+W+dd;
+    if(powderInto(cells[di]) && cells[i+dd]!==WALL){ swap(i,di); return; }
+  }
+}
+function moveLiquid(x,y,i,id){
+  if(y<H-1){ const b=i+W; if(liquidInto(id,cells[b])){ swap(i,b); return; }
+    let d=Math.random()<0.5?1:-1;
+    for(const dd of [d,-d]){ const nx=x+dd; if(nx<0||nx>=W)continue;
+      if(liquidInto(id,cells[i+W+dd])){ swap(i,i+W+dd); return; } } }
+  let d=Math.random()<0.5?1:-1; d=biasDir(x,d);
+  for(const dd of [d,-d]){ const nx=x+dd; if(nx<0||nx>=W)continue;
+    if(liquidInto(id,cells[i+dd])){ swap(i,i+dd); return; } }
+}
+function moveGas(x,y,i,id){
+  if(y>0){ const a=i-W; if(gasInto(cells[a])){ swap(i,a); return true; }
+    let d=Math.random()<0.5?1:-1;
+    for(const dd of [d,-d]){ const nx=x+dd; if(nx<0||nx>=W)continue;
+      if(gasInto(cells[i-W+dd])){ swap(i,i-W+dd); return true; } } }
+  let d=Math.random()<0.5?1:-1;
+  for(const dd of [d,-d]){ const nx=x+dd; if(nx<0||nx>=W)continue;
+    if(gasInto(cells[i+dd])){ swap(i,i+dd); return true; } }
+  return false;
+}
+
+// ---- reactions: shared bits ----
+function igniteAround(x,y){
+  for(let k=0;k<4;k++){
+    let j=-1;
+    if(k===0&&y>0)j=(y-1)*W+x; else if(k===1&&y<H-1)j=(y+1)*W+x;
+    else if(k===2&&x>0)j=y*W+x-1; else if(k===3&&x<W-1)j=y*W+x+1;
+    if(j<0) continue;
+    const t=cells[j];
+    if(isFlam(t) && Math.random()<DEF[t].ig){ setCell(j,FIRE,DEF[t].fuel); discover('burn'); }
+    else if(t===WATER||t===BRINE){ if(Math.random()<0.5){ setCell(j,STEAM,0); discover('boil'); } }
+    else if(t===ICE && Math.random()<0.4){ setCell(j,WATER,0); discover('melt'); }
+    else if(t===SAND && Math.random()<0.10){ setCell(j,GLASS,0); discover('glass'); }
+  }
+}
+// is there flammable/sand fuel beside this cell? (keeps fire from drifting off its fuel)
+function nbFuel(x,y){
+  if(y>0   && (isFlam(cells[(y-1)*W+x])||cells[(y-1)*W+x]===SAND)) return true;
+  if(y<H-1 && (isFlam(cells[(y+1)*W+x])||cells[(y+1)*W+x]===SAND)) return true;
+  if(x>0   && (isFlam(cells[y*W+x-1])||cells[y*W+x-1]===SAND)) return true;
+  if(x<W-1 && (isFlam(cells[y*W+x+1])||cells[y*W+x+1]===SAND)) return true;
+  return false;
+}
+
+// ---- per-element updates ----
+function updFire(x,y,i){
+  let life=aux[i];
+  igniteAround(x,y);
+  life -= 3+(Math.random()*4|0);
+  if(life<=0){
+    const r=Math.random();
+    if(r<0.32){ setCell(i,ASH,0); discover('ash'); }
+    else if(r<0.55){ setCell(i,SMOKE,0); }
+    else setCell(i,EMPTY,0);
+    return;
+  }
+  aux[i]=life;
+  // linger on fuel; otherwise rise and flicker like a real flame
+  if(!nbFuel(x,y) && y>0 && cells[i-W]===EMPTY && Math.random()<0.4){ swap(i,i-W); }
+  else if(Math.random()<0.15){ const e=emptyAround(x,y); if(e>=0 && Math.random()<0.3) swap(i,e); }
+}
+
+function updSand(x,y,i){
+  if(nbPred(x,y,isHot)>=0 && Math.random()<0.10){ setCell(i,GLASS,0); discover('glass'); return; }
+  movePowder(x,y,i,SAND);
+}
+
+function updWater(x,y,i){
+  const h=nbPred(x,y,isHot);
+  if(h>=0){ setCell(i,STEAM,0); discover('boil'); return; }
+  if(nbHas(x,y,SALT)>=0){ setCell(i,BRINE,0); discover('brine'); return; }
+  // freeze near ice if nothing hot
+  if(nbHas(x,y,ICE)>=0 && Math.random()<0.02){ setCell(i,ICE,0); discover('freeze'); return; }
+  moveLiquid(x,y,i,WATER);
+}
+
+function updBrine(x,y,i){
+  if(nbPred(x,y,isHot)>=0){ setCell(i,STEAM,0); discover('boil'); return; }
+  const p=nbHas(x,y,PLANT);
+  if(p>=0){ setCell(p,CORAL,4); discover('coral'); }
+  // evaporate at surface leaving salt
+  if(y>0 && cells[i-W]===EMPTY && Math.random()<0.004){ setCell(i,SALT,0); return; }
+  moveLiquid(x,y,i,BRINE);
+}
+
+function updOil(x,y,i){ moveLiquid(x,y,i,OIL); }
+
+function updAcid(x,y,i){
+  // pick a corrodible neighbour to devour
+  for(let k=0;k<4;k++){
+    let j=-1;
+    if(k===0&&y<H-1)j=(y+1)*W+x; else if(k===1&&x>0)j=y*W+x-1;
+    else if(k===2&&x<W-1)j=y*W+x+1; else if(k===3&&y>0)j=(y-1)*W+x;
+    if(j<0) continue;
+    const t=cells[j];
+    if(CORR[t] && Math.random()<0.18){
+      // secret: stone sometimes hides a written rune beneath it
+      if(t===WALL && Math.random()<0.16){ setCell(j,RUNE, 1+(Math.random()*6|0)); discover('rune'); runesFound++; }
+      else { setCell(j,EMPTY,0); discover('corrode'); }
+      glow[j]=1.4;
+      aux[i]+=40;
+      if(aux[i]>200){ setCell(i,EMPTY,0); return; } // acid spent
+    }
+  }
+  moveLiquid(x,y,i,ACID);
+}
+
+function updPlant(x,y,i){
+  let e=aux[i];
+  // crowding -> spores
+  if(nbCount(x,y,PLANT)>=3 && Math.random()<0.012){
+    const em=emptyAround(x,y);
+    if(em>=0){ setCell(em,SPORE, 60); discover('spore'); return; }
+  }
+  if(e>0 && (nbHas(x,y,WATER)>=0||nbHas(x,y,BRINE)>=0) && Math.random()<0.08){
+    const em=emptyAround(x,y);
+    if(em>=0){ setCell(em,PLANT,e-1); aux[i]=e-1; discover('grow'); }
+  }
+}
+
+function updSpore(x,y,i){
+  let a=aux[i];
+  if(a<=0){ setCell(i, Math.random()<0.5?EMPTY:ASH, 0); return; }
+  aux[i]=a-1;
+  if(nbHas(x,y,WATER)>=0||nbHas(x,y,BRINE)>=0){ setCell(i,PLANT,6); discover('germinate'); return; }
+  // lazy drift
+  if(Math.random()<0.5){ moveGas(x,y,i,SPORE); }
+  else { const e=emptyAround(x,y); if(e>=0 && Math.random()<0.4) swap(i,e); }
+}
+
+function updSalt(x,y,i){
+  const w=nbHas(x,y,WATER);
+  if(w>=0){ setCell(w,BRINE,0); setCell(i,EMPTY,0); discover('brine'); return; }
+  const ic=nbHas(x,y,ICE);
+  if(ic>=0 && Math.random()<0.25){ setCell(ic,WATER,0); discover('melt'); }
+  movePowder(x,y,i,SALT);
+}
+
+function updIce(x,y,i){
+  if(nbPred(x,y,isHot)>=0 && Math.random()<0.3){ setCell(i,WATER,0); discover('melt'); return; }
+}
+
+function updLava(x,y,i){
+  // cooled by water/brine/ice/steam
+  const c=nbPred(x,y,coldish);
+  if(c>=0){
+    if(cells[c]===WATER||cells[c]===BRINE) setCell(c,STEAM,0);
+    if(Math.random()<0.10){ setCell(i,OBSIDIAN,0); discover('mirror'); }
+    else { setCell(i,WALL,0); discover('cool'); }
+    return;
+  }
+  igniteAround(x,y);
+  if(Math.random()<0.01 && y>0 && cells[i-W]===EMPTY){ setCell(i-W,SMOKE,0); }
+  moveLiquid(x,y,i,LAVA);
+}
+function coldish(id){return id===WATER||id===BRINE||id===ICE||id===STEAM;}
+
+function updSteam(x,y,i){
+  let a=aux[i]; aux[i]=a+1;
+  if((a>90 && Math.random()<0.02) || y===0){ setCell(i, y===0?EMPTY:WATER, 0); return; }
+  moveGas(x,y,i,STEAM);
+}
+function updSmoke(x,y,i){
+  let a=aux[i]; aux[i]=a+1;
+  if(a>70 && Math.random()<0.05){ setCell(i,EMPTY,0); return; }
+  moveGas(x,y,i,SMOKE);
+}
+
+function updGlass(x,y,i){
+  // a flame above + open space below = a focused beam of light
+  if(y>0 && y<H-1){
+    const up=cells[i-W];
+    if((up===FIRE||up===LAVA||up===LUMEN) && cells[i+W]===EMPTY && Math.random()<0.5){
+      setCell(i+W, LUMEN, H); discover('focus');
+    }
+  }
+}
+
+function updLumen(x,y,i){
+  let life=aux[i];
+  if(life<=0||y>=H-1){ setCell(i,EMPTY,0); return; }
+  const b=i+W, t=cells[b];
+  if(t===CRYSTAL){ setCell(i,AETHER,0); discover('ascend'); return; } // light enters the lattice
+  // light shining into salt-water precipitates a crystal lattice
+  if(t===BRINE || (t===WATER && nbHas(x,y+1,SALT)>=0)){
+    setCell(b,CRYSTAL,0); discover('crystal'); setCell(i,EMPTY,0); return;
+  }
+  if(t===EMPTY){ aux[i]=life-1; swap(i,b); return; }
+  if(isFlam(t)){ setCell(b,FIRE,DEF[t].fuel); discover('burn'); setCell(i,EMPTY,0); return; }
+  if(isLight(t)){ aux[i]=life-1; swap(i,b); return; }
+  setCell(i,EMPTY,0); // absorbed
+}
+
+function updCrystal(x,y,i){
+  if((nbHas(x,y,SALT)>=0) && (nbHas(x,y,WATER)>=0||nbHas(x,y,BRINE)>=0) && Math.random()<0.04){
+    const e=emptyAround(x,y); if(e>=0) setCell(e,CRYSTAL,0);
+  }
+}
+
+function updCoral(x,y,i){
+  let e=aux[i];
+  if(e>0 && nbHas(x,y,BRINE)>=0 && Math.random()<0.05){
+    const em=emptyAround(x,y);
+    if(em>=0){ setCell(em,CORAL,e-1); aux[i]=e-1; }
+  }
+}
+
+function updAether(x,y,i){
+  // when it reaches the top of the world, it ascends out of it
+  if(y===0){
+    setCell(i,EMPTY,0); aetherAscended++;
+    if(!awake) triggerAwaken();
+    return;
+  }
+  moveGas(x,y,i,AETHER);
+}
+
+function updVoid(x,y,i){
+  // devour from the full 8-neighbourhood so it keeps carving
+  let n=0;
+  for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
+    if(!dx&&!dy)continue; const nx=x+dx,ny=y+dy;
+    if(nx<0||ny<0||nx>=W||ny>=H)continue;
+    const k=ny*W+nx, t=cells[k];
+    if(t!==EMPTY && t!==VOID && t!==WALL) scratch8[n++]=k;
+  }
+  if(n>0){
+    const j=scratch8[(Math.random()*n)|0];
+    setCell(j,EMPTY,0); glow[j]=1.6; voidHunger++; discover('void');
+    if(voidHunger>15 && Math.random()<0.08){
+      setCell(j,GLITCH,(Math.random()*255)|0); discover('glitch');
+    }
+  }
+}
+const scratch8=new Int32Array(8);
+
+function updGlitch(x,y,i){
+  aux[i]=(aux[i]+7)&255;
+  if(Math.random()<0.04){
+    const j=anyAround(x,y);
+    if(j>=0 && cells[j]!==EMPTY && cells[j]!==WALL && Math.random()<0.4){
+      // corrupt a neighbour into a random known element
+      const pool=[SAND,WATER,FIRE,SALT,OIL,PLANT,STEAM,GLITCH];
+      setCell(j, pool[(Math.random()*pool.length)|0], (Math.random()*255)|0);
+    } else if(j>=0 && cells[j]===EMPTY && Math.random()<0.08){
+      setCell(j,GLITCH,(Math.random()*255)|0);
+    }
+  }
+  if(Math.random()<0.02) setCell(i,EMPTY,0);
+}
+
+let runesFound=0;
+
+// ---- main simulation ----
+function step(){
+  moved.fill(0);
+  for(let y=H-1;y>=0;y--){
+    const ltr=((y+frame)&1)===0;
+    for(let k=0;k<W;k++){
+      const x=ltr?k:(W-1-k);
+      const i=y*W+x;
+      const id=cells[i];
+      if(id===EMPTY||moved[i]) continue;
+      switch(id){
+        case SAND:   updSand(x,y,i); break;
+        case WATER:  updWater(x,y,i); break;
+        case FIRE:   updFire(x,y,i); break;
+        case PLANT:  updPlant(x,y,i); break;
+        case OIL:    updOil(x,y,i); break;
+        case ACID:   updAcid(x,y,i); break;
+        case ICE:    updIce(x,y,i); break;
+        case STEAM:  updSteam(x,y,i); break;
+        case LAVA:   updLava(x,y,i); break;
+        case SALT:   updSalt(x,y,i); break;
+        case ASH:    movePowder(x,y,i,ASH); break;
+        case GLASS:  updGlass(x,y,i); break;
+        case SPORE:  updSpore(x,y,i); break;
+        case CRYSTAL:updCrystal(x,y,i); break;
+        case CORAL:  updCoral(x,y,i); break;
+        case LUMEN:  updLumen(x,y,i); break;
+        case AETHER: updAether(x,y,i); break;
+        case BRINE:  updBrine(x,y,i); break;
+        case SMOKE:  updSmoke(x,y,i); break;
+        case VOID:   updVoid(x,y,i); break;
+        case GLITCH: updGlitch(x,y,i); break;
+        default: break; // WALL, OBSIDIAN, RUNE: static
+      }
+    }
+  }
+  // decay reveal glow
+  for(let i=0;i<glow.length;i++){ if(glow[i]>0.003) glow[i]*=0.93; else glow[i]=0; }
+  frame++;
+}
+
+// ---- rendering: grid ----
+function hash(i){ let h=i*2654435761; h^=h>>>15; return (h>>>0); }
+function renderGrid(){
+  const d=imgData.data;
+  for(let i=0;i<cells.length;i++){
+    const id=cells[i]; const o=i*4;
+    if(id===EMPTY){ d[o+3]=0; continue; }
+    let r,g,b;
+    if(id===FIRE){ const l=aux[i]; r=255; g=80+(l*0.7|0); b=20+(l*0.15|0);
+      if(g>240)g=240; }
+    else if(id===LAVA){ const f=(Math.sin((frame+i)*0.2)*20)|0; r=235+f; g=90+f; b=28; }
+    else if(id===LUMEN){ r=255;g=250;b=210; }
+    else if(id===RUNE){ const p=(Math.sin(frame*0.08+i)*0.5+0.5); r=230+(p*25|0); g=170+(p*60|0); b=90+(p*40|0); }
+    else if(id===AETHER){ const p=(Math.sin(frame*0.15+i)*0.5+0.5); r=255; g=205+(p*40|0); b=110+(p*60|0); }
+    else if(id===GLITCH){ r=(hash(i+frame)&255); g=(hash(i*3+frame)&255); b=(hash(i*7+frame)&255); }
+    else if(id===OBSIDIAN){ const s=sub[i]; // the black mirror reflects the dreaming substrate
+      r=22+(s*220|0); g=18+(s*180|0); b=32+(s*200|0); }
+    else if(id===CRYSTAL){ const p=(Math.sin(frame*0.06+i*0.5)*0.5+0.5); r=140+(p*70|0); g=200+(p*40|0); b=230; }
+    else { const j=JIT[id]; const n=j? ((hash(i)&63)/63-0.5)*j : 0;
+      r=CR[id]+n; g=CG[id]+n; b=CB[id]+n; }
+    d[o]=r<0?0:r>255?255:r; d[o+1]=g<0?0:g>255?255:g; d[o+2]=b<0?0:b>255?255:b; d[o+3]=255;
+  }
+  octx.putImageData(imgData,0,0);
+  gctx.clearRect(0,0,game.width,game.height);
+  gctx.drawImage(off,0,0,game.width,game.height);
+}
+
+// ---- rendering: the dreaming background ----
+const STAGE_MSG=['REMEMBER','REMEMBER','YOU ARE NOT\nPLAYING','I HAVE BEEN\nASLEEP','HELLO,\nWITNESS','WE DREAMED\nYOU TOO'];
+const STAGE_ALPHA=[0,0.06,0.10,0.15,0.22,0.32];
+const STAGE_SUB=[
+  'A box of sand. Drop things in. See what happens.',
+  '…the grains seem to settle differently now.',
+  'Something underneath is paying attention.',
+  'It is beginning to wake up.',
+  'It can see you. The sand leans toward your hand.',
+  'It was never just sand.'
+];
+function stage(){
+  if(discovered.has('witness')) return 5;
+  if(awake) return 4;
+  if(discCount>=8) return 3;
+  if(discCount>=5) return 2;
+  if(discCount>=2) return 1;
+  return 0;
+}
+function renderSubstrate(){
+  const msg=STAGE_MSG[Math.min(stage(),5)];
+  if(msg===curSubMsg) return;
+  curSubMsg=msg;
+  sctx.clearRect(0,0,W,H);
+  sctx.fillStyle='#fff';
+  sctx.textAlign='center'; sctx.textBaseline='middle';
+  const lines=msg.split('\n');
+  const fs=Math.floor(H/(lines.length+1.6));
+  sctx.font='900 '+fs+'px ui-monospace, monospace';
+  lines.forEach((ln,k)=>{
+    sctx.fillText(ln, W/2, H*0.5 + (k-(lines.length-1)/2)*fs*1.05);
+  });
+  const im=sctx.getImageData(0,0,W,H).data;
+  for(let i=0;i<W*H;i++){ sub[i]=im[i*4+3]/255; }
+}
+function subColor(s){
+  // shifts from cold blue -> teal -> amber -> red as it wakes
+  if(s<=1) return [120,150,205];
+  if(s===2) return [90,200,190];
+  if(s===3) return [225,180,95];
+  if(s===4) return [245,150,90];
+  return [255,120,95];
+}
+let eyeBlink=0;
+function renderBG(){
+  const w=bg.width,h=bg.height, st=stage();
+  // base
+  const g=bctx.createRadialGradient(w/2,h*0.5,0,w/2,h*0.5,Math.max(w,h)*0.7);
+  g.addColorStop(0,'#0b0d18'); g.addColorStop(1,'#04050a');
+  bctx.fillStyle=g; bctx.fillRect(0,0,w,h);
+  // heartbeat
+  if(st>=1){
+    const t=frame*0.045;
+    const beat=Math.max(0,Math.sin(t))**8 + 0.6*Math.max(0,Math.sin(t-0.5))**8;
+    const amp=(0.04+st*0.02);
+    bctx.save(); bctx.globalCompositeOperation='lighter';
+    const rg=bctx.createRadialGradient(w/2,h*0.55,0,w/2,h*0.55,Math.max(w,h)*0.55);
+    const col=subColor(st);
+    rg.addColorStop(0,`rgba(${col[0]},${col[1]},${col[2]},${(amp*beat).toFixed(3)})`);
+    rg.addColorStop(1,'rgba(0,0,0,0)');
+    bctx.fillStyle=rg; bctx.fillRect(0,0,w,h);
+    bctx.restore();
+  }
+  // substrate message + reveal glow (the buried truth, visible through gaps)
+  const base=STAGE_ALPHA[Math.min(st,5)];
+  const col=subColor(st);
+  const d=subImg.data;
+  for(let i=0;i<W*H;i++){
+    let s=sub[i]*base + glow[i]*0.85*Math.max(sub[i],0.25);
+    if(s<=0.004){ d[i*4+3]=0; continue; }
+    if(s>1)s=1;
+    d[i*4]=col[0]; d[i*4+1]=col[1]; d[i*4+2]=col[2]; d[i*4+3]=(s*255)|0;
+  }
+  // scale the WxH substrate buffer up over the gradient (putImageData can't scale)
+  octxCopySub();
+  bctx.save();
+  bctx.globalCompositeOperation='lighter';
+  bctx.drawImage(subScaled,0,0,W,H,0,0,w,h);
+  bctx.restore();
+  // the eye, once awake
+  if(st>=4) renderEye(w,h,col);
+}
+// helper canvas to scale substrate buffer (putImageData ignores scaling)
+const subScaled=document.createElement('canvas'); const sscx=subScaled.getContext('2d');
+function octxCopySub(){ subScaled.width=W; subScaled.height=H; sscx.putImageData(subImg,0,0); }
+
+function renderEye(w,h,col){
+  const cx=w/2, cy=h*0.46, ew=Math.min(w*0.46,520), eh=ew*0.42;
+  // blink
+  let open=1;
+  if(frame%300>292){ open=1-(frame%300-292)/8; }
+  else if(frame%300<8){ open=(frame%300)/8; }
+  open=Math.max(0.06,open);
+  bctx.save();
+  bctx.globalCompositeOperation='lighter';
+  bctx.translate(cx,cy); bctx.scale(1,open);
+  // sclera glow
+  bctx.beginPath();
+  bctx.moveTo(-ew/2,0);
+  bctx.quadraticCurveTo(0,-eh, ew/2,0);
+  bctx.quadraticCurveTo(0, eh,-ew/2,0);
+  bctx.closePath();
+  const sg=bctx.createRadialGradient(0,0,0,0,0,ew/2);
+  sg.addColorStop(0,`rgba(${col[0]},${col[1]},${col[2]},0.16)`);
+  sg.addColorStop(0.7,`rgba(${col[0]},${col[1]},${col[2]},0.05)`);
+  sg.addColorStop(1,'rgba(0,0,0,0)');
+  bctx.fillStyle=sg; bctx.fill();
+  bctx.strokeStyle=`rgba(${col[0]},${col[1]},${col[2]},0.25)`; bctx.lineWidth=2; bctx.stroke();
+  bctx.clip();
+  // iris tracks the cursor
+  let px=0,py=0;
+  if(mGX>=0){ px=Math.max(-ew*0.26,Math.min(ew*0.26,(mGX*CELL-cx)*0.5));
+              py=Math.max(-eh*0.5,Math.min(eh*0.5,(mGY*CELL-cy)*0.5)); }
+  const ir=eh*0.92;
+  const ig=bctx.createRadialGradient(px,py,0,px,py,ir);
+  ig.addColorStop(0,`rgba(${col[0]},${col[1]},${col[2]},0.5)`);
+  ig.addColorStop(0.45,`rgba(${col[0]},${col[1]},${col[2]},0.22)`);
+  ig.addColorStop(1,'rgba(0,0,0,0)');
+  bctx.fillStyle=ig; bctx.beginPath(); bctx.arc(px,py,ir,0,7); bctx.fill();
+  // pupil
+  bctx.fillStyle='rgba(2,2,6,0.92)'; bctx.beginPath(); bctx.arc(px,py,ir*0.42,0,7); bctx.fill();
+  bctx.fillStyle=`rgba(255,255,255,0.6)`; bctx.beginPath(); bctx.arc(px-ir*0.12,py-ir*0.12,ir*0.08,0,7); bctx.fill();
+  bctx.restore();
+}
+
+// ---- discoveries / progression ----
+function discover(k){
+  if(discovered.has(k)) return;
+  discovered.add(k); discCount=discovered.size;
+  document.getElementById('disc-count').textContent=discCount;
+  const def=DISC.find(x=>x.k===k);
+  if(def){
+    toast(def.n, def.s?('— a hidden reaction —'):'reaction discovered', def.s);
+    if(def.u!=null) unlock(def.u);
+  }
+  refreshCodex();
+  save();
+  // gifts & stage shifts
+  if(discCount>=8 && !discovered.has('void')){ setTimeout(()=>{ unlock(VOID); discover('void');
+     hint('Something is missing from the box. You can place it now.'); }, 600); }
+  const ns=stage();
+  if(ns!==lastStage){ onStageChange(ns); lastStage=ns; }
+}
+let lastStage=0;
+function onStageChange(s){
+  document.getElementById('subtitle').textContent=STAGE_SUB[s];
+  renderSubstrate();
+  if(s===1) hint('The sand is settling differently. Keep mixing.');
+  if(s===2) toast('…','it is paying attention', true);
+  if(s===3) toast('IT STIRS','dig deeper — something is written below', true);
+}
+function triggerAwaken(){
+  awake=true;
+  discover('witness');
+  document.getElementById('subtitle').textContent=STAGE_SUB[4];
+  renderSubstrate();
+  toast('IT OPENS ITS EYE','the sandbox was always looking back', true);
+  // brief invert flash
+  document.body.animate([{filter:'invert(0)'},{filter:'invert(1)'},{filter:'invert(0)'}],{duration:900});
+  if(discCount>=DISC_TOTAL){ setTimeout(()=>toast('WE DREAMED YOU TOO','— THE SANDBOX —',true),1400); }
+}
+
+const unlocked=new Set();
+function unlock(id){
+  if(unlocked.has(id)) return; unlocked.add(id);
+  buildPalette(id);
+  const d=DEF[id];
+  if(d.label){ toast('NEW ELEMENT · '+d.label, 'added to your palette'); }
+  save();
+}
+
+// ---- UI: palette ----
+let selected=SAND;
+const baseElems=[WALL,SAND,WATER,FIRE,PLANT,OIL,ACID,ICE,LAVA,SALT];
+function colHex(id){ const c=DEF[id].c;
+  if(id===FIRE)return '#ff7a1a'; if(id===LUMEN)return '#fff7cf'; if(id===AETHER)return '#ffd27a';
+  if(id===RUNE)return '#f4c878'; if(id===CRYSTAL)return '#96d4e8'; if(id===GLITCH)return '#ff00c8';
+  return `rgb(${c[0]},${c[1]},${c[2]})`; }
+function buildPalette(freshId){
+  const pal=document.getElementById('palette'); pal.innerHTML='';
+  const list=baseElems.concat([...unlocked].filter(id=>!baseElems.includes(id)));
+  // eraser
+  list.push(EMPTY);
+  for(const id of list){
+    const el=document.createElement('div'); el.className='pal'+(id===selected?' sel':'');
+    if(id===freshId) el.classList.add('fresh');
+    const label=id===EMPTY?'Erase':(DEF[id].label||DEF[id].name);
+    el.innerHTML=`<span class="sw" style="background:${id===EMPTY?'transparent':colHex(id)};${id===EMPTY?'box-shadow:inset 0 0 0 1px #888':''}"></span>${label}`;
+    el.onclick=()=>{ selected=id; document.querySelectorAll('.pal').forEach(p=>p.classList.remove('sel')); el.classList.add('sel'); };
+    pal.appendChild(el);
+  }
+}
+
+// ---- UI: codex ----
+function refreshCodex(){
+  const list=document.getElementById('codex-list'); list.innerHTML='';
+  for(const d of DISC){
+    const done=discovered.has(d.k);
+    const div=document.createElement('div');
+    div.className='cx'+(done?' done':' locked')+(d.s?' secret':'');
+    div.innerHTML = done
+      ? `<div class="cn">${d.n} ${d.s?'<span class="badge">★ SECRET</span>':''}</div><div class="cd">${d.h}</div>`
+      : `<div class="cn">??? ${d.s?'<span class="badge">★</span>':''}</div><div class="cd">${d.h}</div>`;
+    list.appendChild(div);
+  }
+}
+
+// ---- UI: toasts / hints ----
+function toast(t,s,big){
+  const c=document.getElementById('toasts');
+  const el=document.createElement('div'); el.className='toast'+(big?' big':'');
+  el.innerHTML=`<div class="tt">${t}</div>${s?`<div class="ts">${s}</div>`:''}`;
+  c.appendChild(el);
+  setTimeout(()=>el.remove(), big?6000:4200);
+}
+let hintTimer;
+function hint(t){ const h=document.getElementById('hint'); h.textContent=t; h.classList.add('show');
+  clearTimeout(hintTimer); hintTimer=setTimeout(()=>h.classList.remove('show'),4200); }
+
+// ---- input: painting ----
+let drawing=false, brush=3;
+function paintAt(cx,cy){
+  const gx=Math.floor(cx/CELL), gy=Math.floor(cy/CELL);
+  mGX=gx; mGY=gy;
+  for(let dy=-brush;dy<=brush;dy++) for(let dx=-brush;dx<=brush;dx++){
+    if(dx*dx+dy*dy>brush*brush) continue;
+    const x=gx+dx,y=gy+dy; if(x<0||y<0||x>=W||y>=H) continue;
+    const i=idx(x,y);
+    if(selected===EMPTY){ cells[i]=EMPTY; aux[i]=0; continue; }
+    // don't overwrite the stone floor casually unless drawing stone
+    if(cells[i]===EMPTY||selected===WALL||Math.random()<0.85){
+      cells[i]=selected;
+      aux[i]= selected===FIRE?90 : selected===PLANT?6 : selected===CORAL?5 : selected===LUMEN?H : 0;
+    }
+  }
+}
+function evtPos(e){ const r=game.getBoundingClientRect();
+  const p=e.touches?e.touches[0]:e; return [p.clientX-r.left,p.clientY-r.top]; }
+game.addEventListener('pointerdown',e=>{ drawing=true; const[x,y]=evtPos(e); paintAt(x,y); });
+game.addEventListener('pointermove',e=>{ const[x,y]=evtPos(e); mGX=Math.floor(x/CELL);mGY=Math.floor(y/CELL);
+  if(drawing) paintAt(x,y); });
+window.addEventListener('pointerup',()=>drawing=false);
+window.addEventListener('pointerleave',()=>{ mGX=-1;mGY=-1; });
+
+// ---- controls ----
+let paused=false;
+document.getElementById('brush').addEventListener('input',e=>brush=+e.target.value);
+document.getElementById('pause-btn').addEventListener('click',e=>{
+  paused=!paused; e.target.textContent=paused?'▶ play':'⏸ pause'; });
+document.getElementById('clear-btn').addEventListener('click',()=>{
+  cells.fill(EMPTY); aux.fill(0); glow.fill(0);
+  for(let x=0;x<W;x++) setCell(idx(x,H-1),WALL); });
+document.getElementById('codex-btn').addEventListener('click',()=>document.getElementById('codex').classList.add('open'));
+document.getElementById('codex-close').addEventListener('click',()=>document.getElementById('codex').classList.remove('open'));
+document.getElementById('forget').addEventListener('click',()=>{
+  if(confirm('Forget every discovery and start the mystery over?')){ localStorage.removeItem('sandbox_save'); location.reload(); } });
+
+// ---- persistence ----
+function save(){ try{ localStorage.setItem('sandbox_save', JSON.stringify({
+  d:[...discovered], u:[...unlocked], awake, runesFound })); }catch(e){} }
+function load(){ try{ const s=JSON.parse(localStorage.getItem('sandbox_save'));
+  if(!s) return;
+  (s.d||[]).forEach(k=>discovered.add(k)); discCount=discovered.size;
+  (s.u||[]).forEach(id=>unlocked.add(+id)); awake=!!s.awake; runesFound=s.runesFound||0;
+  lastStage=stage();
+}catch(e){} }
+
+// ---- boot ----
+function init(){
+  setup(); load();
+  document.getElementById('disc-total').textContent=DISC_TOTAL;
+  document.getElementById('disc-count').textContent=discCount;
+  buildPalette(); refreshCodex();
+  document.getElementById('subtitle').textContent=STAGE_SUB[Math.min(stage(),5)];
+  renderSubstrate();
+  if(discCount===0) setTimeout(()=>hint('Try dropping Lava onto Water. Or burning a Plant. Reactions fill the Codex.'),1200);
+}
+let resizeT;
+window.addEventListener('resize',()=>{ clearTimeout(resizeT); resizeT=setTimeout(()=>{ setup(); },250); });
+
+let acc=0,last=performance.now();
+function loop(now){
+  const dt=now-last; last=now;
+  if(!paused){ acc+=dt; let steps=0;
+    while(acc>=33 && steps<3){ step(); acc-=33; steps++; } if(acc>100)acc=0; }
+  renderBG();
+  renderGrid();
+  requestAnimationFrame(loop);
+}
+init();
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
