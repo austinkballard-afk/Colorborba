@@ -1,0 +1,494 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lumen Medusa — Alien Jellyfish</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #030312; }
+  canvas { display: block; width: 100vw; height: 100vh; cursor: crosshair; }
+  #hud {
+    position: fixed; left: 24px; bottom: 20px; pointer-events: none;
+    font-family: "Segoe UI", system-ui, sans-serif; color: #9fd8e8;
+    text-shadow: 0 0 12px rgba(80, 220, 255, .35); user-select: none;
+  }
+  #hud h1 { font-size: 17px; font-weight: 300; letter-spacing: 6px; margin: 0 0 4px; text-transform: uppercase; }
+  #hud p  { font-size: 11px; letter-spacing: 2px; margin: 0; opacity: .55; }
+</style>
+<canvas id="c"></canvas>
+<div id="hud">
+  <h1>Vel'maris Lumen Medusa</h1>
+  <p>Specimen 7 &middot; Abyssal Trench of Kessel-9 &middot; move pointer to lure &middot; click to startle</p>
+</div>
+<script>
+'use strict';
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W = 0, H = 0, DPR = 1;
+
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = W * DPR; canvas.height = H * DPR;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+const TAU = Math.PI * 2;
+const rand = (a, b) => a + Math.random() * (b - a);
+const lerp = (a, b, t) => a + (b - a) * t;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+// slow ambient water current, sampled anywhere in the scene
+function current(x, y, t) {
+  return {
+    x: Math.sin(y * 0.004 + t * 0.28) * 0.35 + Math.cos(x * 0.002 - t * 0.11) * 0.2,
+    y: Math.cos(x * 0.003 + t * 0.17) * 0.16 - 0.05
+  };
+}
+
+// ---------------------------------------------------------------- pointer
+const pointer = { x: null, y: null, active: false };
+window.addEventListener('pointermove', e => {
+  pointer.x = e.clientX; pointer.y = e.clientY; pointer.active = true;
+});
+window.addEventListener('pointerleave', () => pointer.active = false);
+
+const rings = [];   // startle shockwaves
+const spores = [];  // glowing exhaust / panic spores
+window.addEventListener('pointerdown', e => {
+  rings.push({ x: e.clientX, y: e.clientY, r: 10, a: 0.9 });
+  jelly.startle(e.clientX, e.clientY);
+});
+
+// ---------------------------------------------------------------- motes (plankton)
+const motes = [];
+for (let i = 0; i < 150; i++) {
+  motes.push({
+    x: Math.random() * 4000, y: Math.random() * 4000,
+    z: rand(0.25, 1), tw: rand(0, TAU), hue: rand(150, 320)
+  });
+}
+
+// ---------------------------------------------------------------- abyssal flora
+function makeFlora() {
+  const strands = [];
+  const n = Math.max(5, Math.floor(W / 190));
+  for (let i = 0; i < n; i++) {
+    strands.push({
+      x: (i + rand(0.15, 0.85)) * (W / n),
+      h: rand(H * 0.16, H * 0.34),
+      seg: 14, phase: rand(0, TAU), speed: rand(0.4, 0.9),
+      hue: rand(90, 200), sway: rand(10, 26), bulb: rand(3, 7)
+    });
+  }
+  return strands;
+}
+let flora = makeFlora();
+window.addEventListener('resize', () => flora = makeFlora());
+
+// ---------------------------------------------------------------- background jellies
+const drifters = [];
+for (let i = 0; i < 5; i++) {
+  drifters.push({
+    x: rand(0, 2000), y: rand(0, 1200), s: rand(0.18, 0.45),
+    hue: rand(160, 340), phase: rand(0, TAU), speed: rand(0.5, 1.1),
+    vx: rand(-0.1, 0.1), vy: rand(-0.22, -0.08)
+  });
+}
+
+// ---------------------------------------------------------------- the jellyfish
+class Tentacle {
+  constructor(nSeg, segLen, phase, weight) {
+    this.n = nSeg; this.len = segLen; this.phase = phase; this.weight = weight;
+    this.pts = Array.from({ length: nSeg }, () => ({ x: 0, y: 0 }));
+    this.flare = 0; // startle response
+  }
+  anchor(x, y) { this.pts[0].x = x; this.pts[0].y = y; }
+  update(t) {
+    this.flare *= 0.95;
+    const p = this.pts;
+    for (let i = 1; i < this.n; i++) {
+      const q = p[i], prev = p[i - 1];
+      const c = current(q.x, q.y, t);
+      // drift forces: water current, buoyancy sag, serpentine sway, flare kick
+      q.x += c.x * 0.8 + Math.sin(t * 1.7 + this.phase + i * 0.42) * (0.35 + this.flare * 2.2);
+      q.y += 0.55 * this.weight + c.y * 0.5 - this.flare * 1.4;
+      // distance constraint back to parent segment
+      const dx = q.x - prev.x, dy = q.y - prev.y;
+      const d = Math.hypot(dx, dy) || 1;
+      q.x = prev.x + (dx / d) * this.len;
+      q.y = prev.y + (dy / d) * this.len;
+    }
+  }
+}
+
+class Jellyfish {
+  constructor() {
+    this.x = W / 2; this.y = H * 0.42;
+    this.vx = 0; this.vy = 0;
+    this.R = clamp(Math.min(W, H) * 0.16, 80, 150);
+    this.phase = rand(0, TAU);
+    this.hue = 195;         // drifts over time; jumps when startled
+    this.hueTarget = 195;
+    this.tilt = 0;
+    this.panic = 0;
+    this.wander = { x: W / 2, y: H / 2, t: 0 };
+    this.lobes = 9;
+    this.tentacles = [];
+    for (let i = 0; i < this.lobes; i++)
+      this.tentacles.push(new Tentacle(24, this.R * 0.115, rand(0, TAU), 1));
+    this.arms = [];
+    for (let i = 0; i < 4; i++)
+      this.arms.push(new Tentacle(16, this.R * 0.14, rand(0, TAU), 0.7));
+  }
+
+  startle(x, y) {
+    this.panic = 1;
+    this.hueTarget = (this.hueTarget + rand(70, 160)) % 360;
+    const dx = this.x - x, dy = this.y - y, d = Math.hypot(dx, dy) || 1;
+    this.vx += (dx / d) * 6; this.vy += (dy / d) * 6;
+    for (const t of [...this.tentacles, ...this.arms]) t.flare = 1;
+    for (let i = 0; i < 40; i++) {
+      const a = rand(0, TAU), sp = rand(0.5, 3.2);
+      spores.push({ x: this.x, y: this.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+                    a: 1, r: rand(1, 3.4), hue: this.hueTarget });
+    }
+  }
+
+  update(t, dt) {
+    this.phase += dt * (1.5 + this.panic * 2.5);
+    this.panic *= 0.985;
+    this.hue += (this.hueTarget - this.hue) * 0.02;
+    this.hueTarget += dt * 2; // slow ambient color drift
+
+    // pulse cycle: sharp contraction, slow relax
+    const cyc = (this.phase % TAU) / TAU;
+    this.c = cyc < 0.3 ? Math.sin(cyc / 0.3 * Math.PI / 2) : Math.cos((cyc - 0.3) / 0.7 * Math.PI / 2);
+
+    // steer: toward pointer if present, otherwise a lazy wander point
+    this.wander.t -= dt;
+    if (this.wander.t <= 0) {
+      this.wander = { x: rand(W * 0.2, W * 0.8), y: rand(H * 0.18, H * 0.6), t: rand(4, 9) };
+    }
+    const tx = pointer.active ? pointer.x : this.wander.x;
+    const ty = pointer.active ? pointer.y : this.wander.y;
+    const dx = tx - this.x, dy = ty - this.y, d = Math.hypot(dx, dy) || 1;
+
+    // thrust on contraction, aimed at target
+    const thrust = Math.max(0, Math.sin(cyc * TAU)) * 0.05 * (1 + this.panic * 2);
+    this.vx += (dx / d) * thrust; this.vy += (dy / d) * thrust;
+    const c = current(this.x, this.y, t);
+    this.vx += c.x * 0.01; this.vy += c.y * 0.01;
+    this.vx *= 0.985; this.vy *= 0.985;
+    this.x += this.vx; this.y += this.vy;
+    this.x = clamp(this.x, this.R, W - this.R);
+    this.y = clamp(this.y, this.R, H - this.R * 0.6);
+    this.tilt += (clamp(this.vx * 0.06, -0.5, 0.5) - this.tilt) * 0.04;
+
+    // exhale spores at peak contraction
+    if (cyc < 0.05 && Math.random() < 0.5) {
+      spores.push({ x: this.x + rand(-20, 20), y: this.y + this.R * 0.5,
+                    vx: rand(-0.3, 0.3), vy: rand(0.6, 1.6),
+                    a: 0.8, r: rand(0.8, 2.2), hue: this.hue + rand(-30, 30) });
+    }
+
+    // anchor + simulate appendages
+    const rw = this.R * (1 - 0.3 * this.c);
+    const cosT = Math.cos(this.tilt), sinT = Math.sin(this.tilt);
+    const loc = (lx, ly) => ({ x: this.x + lx * cosT - ly * sinT, y: this.y + lx * sinT + ly * cosT });
+    this.tentacles.forEach((tn, i) => {
+      const u = i / (this.lobes - 1);
+      const p = loc(lerp(-rw, rw, u) * 0.92, this.R * 0.18 + Math.sin(u * Math.PI) * -this.R * 0.05);
+      tn.anchor(p.x, p.y); tn.update(t);
+    });
+    this.arms.forEach((ar, i) => {
+      const u = (i + 0.5) / 4;
+      const p = loc(lerp(-rw, rw, u) * 0.4, this.R * 0.22);
+      ar.anchor(p.x, p.y); ar.update(t);
+    });
+  }
+
+  drawAppendage(tn, width, sat, light, alphaMul) {
+    const p = tn.pts;
+    for (let i = 1; i < tn.n; i++) {
+      const f = i / tn.n;
+      ctx.strokeStyle = `hsla(${this.hue + f * 60}, ${sat}%, ${light}%, ${(1 - f) * alphaMul})`;
+      ctx.lineWidth = width * (1 - f * 0.85);
+      ctx.beginPath();
+      ctx.moveTo(p[i - 1].x, p[i - 1].y);
+      ctx.lineTo(p[i].x, p[i].y);
+      ctx.stroke();
+    }
+    // glowing tip
+    const tip = p[tn.n - 1];
+    const g = ctx.createRadialGradient(tip.x, tip.y, 0, tip.x, tip.y, 7);
+    g.addColorStop(0, `hsla(${this.hue + 70}, 100%, 75%, ${0.7 + tn.flare * 0.3})`);
+    g.addColorStop(1, 'transparent');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(tip.x, tip.y, 7, 0, TAU); ctx.fill();
+  }
+
+  draw(t) {
+    const R = this.R, c = this.c;
+    const rw = R * (1 - 0.3 * c);        // rim half-width (narrows on pulse)
+    const hh = R * 0.95 * (1 + 0.3 * c); // bell height (stretches on pulse)
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round';
+
+    // trailing tentacles first (behind the bell)
+    for (const tn of this.tentacles) this.drawAppendage(tn, R * 0.045, 90, 62, 0.5);
+
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.tilt);
+
+    // ambient halo
+    let g = ctx.createRadialGradient(0, -hh * 0.3, 0, 0, -hh * 0.3, R * 2.4);
+    g.addColorStop(0, `hsla(${this.hue}, 90%, 60%, ${0.14 + this.panic * 0.12})`);
+    g.addColorStop(1, 'transparent');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(0, -hh * 0.3, R * 2.4, 0, TAU); ctx.fill();
+
+    // ---- bell membrane: dome + scalloped skirt
+    const skirt = [];
+    for (let i = 0; i <= this.lobes * 8; i++) {
+      const u = i / (this.lobes * 8);
+      const x = lerp(-rw, rw, u);
+      const dip = Math.pow(Math.sin(u * Math.PI * this.lobes), 2) * R * 0.14 * (1 - 0.5 * c);
+      const belly = Math.sin(u * Math.PI) * R * 0.10;
+      skirt.push({ x, y: R * 0.18 + dip + belly });
+    }
+    ctx.beginPath();
+    ctx.moveTo(skirt[0].x, skirt[0].y);
+    ctx.bezierCurveTo(-rw * 1.18, -hh * 0.42, -rw * 0.62, -hh * 1.06, 0, -hh);
+    ctx.bezierCurveTo(rw * 0.62, -hh * 1.06, rw * 1.18, -hh * 0.42, skirt[skirt.length - 1].x, skirt[skirt.length - 1].y);
+    for (let i = skirt.length - 1; i >= 0; i--) ctx.lineTo(skirt[i].x, skirt[i].y);
+    ctx.closePath();
+    g = ctx.createRadialGradient(0, -hh * 0.45, R * 0.1, 0, -hh * 0.35, R * 1.35);
+    g.addColorStop(0.0, `hsla(${this.hue + 40}, 100%, 72%, 0.30)`);
+    g.addColorStop(0.55, `hsla(${this.hue}, 95%, 55%, 0.16)`);
+    g.addColorStop(1.0, `hsla(${this.hue - 40}, 90%, 45%, 0.05)`);
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.strokeStyle = `hsla(${this.hue + 20}, 100%, 78%, 0.55)`;
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+
+    // ---- radial canals (iridescent ribs)
+    for (let i = 0; i < this.lobes; i++) {
+      const u = i / (this.lobes - 1);
+      const rx = lerp(-rw, rw, u) * 0.9;
+      ctx.strokeStyle = `hsla(${this.hue + u * 120}, 100%, 70%, 0.28)`;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(0, -hh * 0.92);
+      ctx.quadraticCurveTo(rx * 0.5, -hh * 0.5, rx, R * 0.16);
+      ctx.stroke();
+    }
+
+    // ---- rotating tri-spiral core (the alien "organ")
+    const spin = t * 0.7;
+    for (let k = 0; k < 3; k++) {
+      ctx.strokeStyle = `hsla(${this.hue + 90 + k * 25}, 100%, 70%, 0.5)`;
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      for (let j = 0; j <= 26; j++) {
+        const f = j / 26;
+        const a = spin + k * TAU / 3 + f * 2.6;
+        const r = f * R * 0.42 * (1 - 0.2 * c);
+        const x = Math.cos(a) * r, y = -hh * 0.42 + Math.sin(a) * r * 0.62;
+        j ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      }
+      ctx.stroke();
+    }
+    g = ctx.createRadialGradient(0, -hh * 0.42, 0, 0, -hh * 0.42, R * 0.4);
+    g.addColorStop(0, `hsla(${this.hue + 110}, 100%, 82%, ${0.55 + 0.3 * Math.sin(t * 3)})`);
+    g.addColorStop(1, 'transparent');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(0, -hh * 0.42, R * 0.4, 0, TAU); ctx.fill();
+
+    // ---- bioluminescent rim beads, firing in sequence
+    for (let i = 0; i < this.lobes; i++) {
+      const u = i / (this.lobes - 1);
+      const bx = lerp(-rw, rw, u) * 0.92;
+      const by = R * 0.16;
+      const pulse = 0.5 + 0.5 * Math.sin(t * 4 - i * 0.9 + this.panic * 6);
+      const rad = 3 + pulse * 5 + this.panic * 4;
+      g = ctx.createRadialGradient(bx, by, 0, bx, by, rad * 2.2);
+      g.addColorStop(0, `hsla(${this.hue + 60}, 100%, 80%, ${0.5 + pulse * 0.5})`);
+      g.addColorStop(1, 'transparent');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(bx, by, rad * 2.2, 0, TAU); ctx.fill();
+    }
+    ctx.restore();
+
+    // oral arms in front of the bell
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round';
+    for (const ar of this.arms) this.drawAppendage(ar, R * 0.085, 70, 68, 0.34);
+    ctx.restore();
+  }
+}
+const jelly = new Jellyfish();
+
+// ---------------------------------------------------------------- scene layers
+function drawBackground(t) {
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  const drift = Math.sin(t * 0.05) * 14;
+  g.addColorStop(0, `hsl(${226 + drift}, 65%, 10%)`);
+  g.addColorStop(0.55, `hsl(${258 + drift}, 55%, 7%)`);
+  g.addColorStop(1, `hsl(${190 + drift}, 60%, 5%)`);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  // faint nebula blooms in the water column
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 3; i++) {
+    const x = W * (0.2 + 0.3 * i) + Math.sin(t * 0.07 + i * 2.1) * W * 0.08;
+    const y = H * (0.25 + 0.22 * i) + Math.cos(t * 0.05 + i) * H * 0.06;
+    const r = Math.min(W, H) * (0.32 + i * 0.08);
+    const bg = ctx.createRadialGradient(x, y, 0, x, y, r);
+    bg.addColorStop(0, `hsla(${200 + i * 60 + drift * 2}, 80%, 45%, 0.045)`);
+    bg.addColorStop(1, 'transparent');
+    ctx.fillStyle = bg;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
+  }
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+function drawRays(t) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 6; i++) {
+    const cx = W * (0.12 + i * 0.16) + Math.sin(t * 0.1 + i * 1.7) * 60;
+    const sway = Math.sin(t * 0.14 + i) * W * 0.06;
+    const wTop = 26 + i * 8;
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, `hsla(${185 + i * 10}, 80%, 65%, ${0.05 + 0.02 * Math.sin(t * 0.5 + i)})`);
+    g.addColorStop(1, 'transparent');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(cx - wTop, -10);
+    ctx.lineTo(cx + wTop, -10);
+    ctx.lineTo(cx + sway + wTop * 3.4, H);
+    ctx.lineTo(cx + sway - wTop * 3.4, H);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawMotes(t) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const m of motes) {
+    const c = current(m.x, m.y, t);
+    m.x += c.x * m.z * 1.4; m.y += c.y * m.z * 1.4 - 0.08 * m.z;
+    const x = ((m.x % W) + W) % W, y = ((m.y % H) + H) % H;
+    const tw = 0.4 + 0.6 * (0.5 + 0.5 * Math.sin(t * 2 + m.tw));
+    ctx.fillStyle = `hsla(${m.hue}, 90%, 75%, ${0.12 + 0.3 * m.z * tw})`;
+    ctx.beginPath(); ctx.arc(x, y, 0.6 + m.z * 1.7, 0, TAU); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawFlora(t) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.lineCap = 'round';
+  for (const f of flora) {
+    let x = f.x, y = H + 4;
+    ctx.beginPath(); ctx.moveTo(x, y);
+    for (let i = 1; i <= f.seg; i++) {
+      const u = i / f.seg;
+      x = f.x + Math.sin(t * f.speed + f.phase + u * 3) * f.sway * u;
+      y = H + 4 - f.h * u;
+      ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = `hsla(${f.hue + Math.sin(t * 0.3 + f.phase) * 30}, 80%, 55%, 0.22)`;
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+    const pulse = 0.5 + 0.5 * Math.sin(t * 1.6 + f.phase);
+    const g = ctx.createRadialGradient(x, y, 0, x, y, f.bulb * (2 + pulse * 2));
+    g.addColorStop(0, `hsla(${f.hue + 40}, 100%, 75%, ${0.35 + pulse * 0.4})`);
+    g.addColorStop(1, 'transparent');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(x, y, f.bulb * (2 + pulse * 2), 0, TAU); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawDrifters(t) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const d of drifters) {
+    d.x += d.vx; d.y += d.vy;
+    const x = ((d.x % (W + 200)) + W + 200) % (W + 200) - 100;
+    const y = ((d.y % (H + 200)) + H + 200) % (H + 200) - 100;
+    const c = 0.5 + 0.5 * Math.sin(t * d.speed + d.phase);
+    const r = 60 * d.s * (1 + 0.2 * c) * 3;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, `hsla(${d.hue}, 90%, 65%, ${0.16 * d.s + 0.1})`);
+    g.addColorStop(0.35, `hsla(${d.hue}, 90%, 55%, ${0.05})`);
+    g.addColorStop(1, 'transparent');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(x, y, 60 * d.s * (1 - 0.25 * c), 50 * d.s * (1 + 0.25 * c), 0, Math.PI, TAU);
+    ctx.fill();
+    ctx.strokeStyle = `hsla(${d.hue + 40}, 90%, 70%, ${0.25 * d.s + 0.05})`;
+    ctx.lineWidth = 1;
+    for (let k = 0; k < 4; k++) {
+      const tx = x - 45 * d.s + k * 30 * d.s;
+      ctx.beginPath();
+      ctx.moveTo(tx, y + 4);
+      ctx.quadraticCurveTo(tx + Math.sin(t + k + d.phase) * 12 * d.s, y + 50 * d.s,
+                           tx + Math.sin(t * 1.3 + k) * 18 * d.s, y + 95 * d.s);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function drawEffects() {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = rings.length - 1; i >= 0; i--) {
+    const r = rings[i];
+    r.r += 7; r.a *= 0.94;
+    if (r.a < 0.02) { rings.splice(i, 1); continue; }
+    ctx.strokeStyle = `hsla(${jelly.hue + 40}, 100%, 75%, ${r.a})`;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(r.x, r.y, r.r, 0, TAU); ctx.stroke();
+  }
+  for (let i = spores.length - 1; i >= 0; i--) {
+    const s = spores[i];
+    s.x += s.vx; s.y += s.vy; s.vx *= 0.985; s.vy = s.vy * 0.985 + 0.015;
+    s.a *= 0.985;
+    if (s.a < 0.02) { spores.splice(i, 1); continue; }
+    ctx.fillStyle = `hsla(${s.hue}, 100%, 72%, ${s.a * 0.8})`;
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, TAU); ctx.fill();
+  }
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------- main loop
+let last = performance.now();
+function frame(now) {
+  const dt = clamp((now - last) / 1000, 0.001, 0.05);
+  last = now;
+  const t = now / 1000;
+
+  drawBackground(t);
+  drawRays(t);
+  drawDrifters(t);
+  drawMotes(t);
+  drawFlora(t);
+  jelly.update(t, dt);
+  jelly.draw(t);
+  drawEffects();
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
