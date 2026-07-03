@@ -83,7 +83,7 @@ function makeFlora() {
   return strands;
 }
 let flora = makeFlora();
-window.addEventListener('resize', () => flora = makeFlora());
+window.addEventListener('resize', () => { flora = makeFlora(); makeVents(); makeAnemones(); });
 
 // ---------------------------------------------------------------- background jellies
 const drifters = [];
@@ -151,6 +151,12 @@ class Jellyfish {
       const a = rand(0, TAU), sp = rand(0.5, 3.2);
       spores.push({ x: this.x, y: this.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
                     a: 1, r: rand(1, 3.4), hue: this.hueTarget });
+    }
+    // the dartfish school panics too
+    for (const f of school) {
+      const fdx = f.x - x, fdy = f.y - y, fd = Math.hypot(fdx, fdy) || 1;
+      const kick = 700 / (fd + 60);
+      f.vx += (fdx / fd) * kick; f.vy += (fdy / fd) * kick;
     }
   }
 
@@ -472,6 +478,370 @@ function drawEffects() {
   ctx.restore();
 }
 
+// ---------------------------------------------------------------- aurora shimmer bands
+function drawAurora(t) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.lineCap = 'round';
+  for (let k = 0; k < 3; k++) {
+    const baseY = H * (0.07 + k * 0.055);
+    ctx.beginPath();
+    for (let i = 0; i <= 60; i++) {
+      const u = i / 60;
+      const y = baseY + Math.sin(u * 7 + t * (0.5 + k * 0.2) + k * 2) * 16
+                      + Math.sin(u * 17 - t * 0.9 + k) * 6;
+      i ? ctx.lineTo(u * W, y) : ctx.moveTo(0, y);
+    }
+    ctx.strokeStyle = `hsla(${170 + k * 45 + Math.sin(t * 0.2) * 20}, 90%, 60%, ${0.05 + 0.03 * Math.sin(t * 0.7 + k * 2)})`;
+    ctx.lineWidth = 14 - k * 4;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------- the leviathan (far background)
+const leviathan = { active: false, timer: 7, dir: 1, x: 0, y: 0, speed: 0, len: 0, ph: 0 };
+function updateLeviathan(t, dt) {
+  const L = leviathan;
+  if (!L.active) {
+    L.timer -= dt;
+    if (L.timer > 0) return;
+    L.active = true;
+    L.dir = Math.random() < 0.5 ? 1 : -1;
+    L.len = Math.min(W, 1500) * rand(0.55, 0.8);
+    L.x = L.dir > 0 ? -L.len : W + L.len;
+    L.y = rand(H * 0.15, H * 0.45);
+    L.speed = rand(30, 50) * L.dir;
+    L.ph = rand(0, TAU);
+  }
+  L.x += L.speed * dt;
+  if ((L.dir > 0 && L.x > W + L.len * 1.2) || (L.dir < 0 && L.x < -L.len * 1.2)) {
+    L.active = false;
+    L.timer = rand(16, 34);
+    return;
+  }
+  const nodes = 22;
+  const spine = [];
+  for (let i = 0; i < nodes; i++) {
+    const u = i / (nodes - 1);
+    spine.push({
+      x: L.x - L.dir * u * L.len,
+      y: L.y + Math.sin(t * 0.9 + L.ph + u * 3.4) * L.len * 0.04 * (0.2 + u), // tail sways more
+      r: L.len * 0.085 * Math.pow(1 - u, 0.55) + 2
+    });
+  }
+  ctx.save();
+  // silhouette body — a shadow moving through the fog
+  ctx.fillStyle = 'rgba(2, 4, 14, 0.5)';
+  for (const s of spine) {
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, TAU); ctx.fill();
+  }
+  // dorsal sail
+  const dh = spine[2];
+  ctx.beginPath();
+  ctx.moveTo(dh.x, dh.y - dh.r * 0.6);
+  ctx.quadraticCurveTo(dh.x - L.dir * L.len * 0.12, dh.y - dh.r * 2.6, dh.x - L.dir * L.len * 0.3, dh.y - dh.r * 0.5);
+  ctx.closePath(); ctx.fill();
+  // photophore rows + eye
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 2; i < nodes - 1; i += 2) {
+    const s = spine[i];
+    const pulse = 0.5 + 0.5 * Math.sin(t * 2.2 - i * 0.8 + L.ph);
+    for (const off of [-0.45, 0.45]) {
+      const g = ctx.createRadialGradient(s.x, s.y + s.r * off, 0, s.x, s.y + s.r * off, 5 + pulse * 4);
+      g.addColorStop(0, `hsla(${300 + i * 6}, 100%, 75%, ${0.12 + pulse * 0.25})`);
+      g.addColorStop(1, 'transparent');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(s.x, s.y + s.r * off, 5 + pulse * 4, 0, TAU); ctx.fill();
+    }
+  }
+  const eye = spine[0];
+  const eg = ctx.createRadialGradient(eye.x + L.dir * eye.r * 0.5, eye.y - eye.r * 0.25, 0,
+                                      eye.x + L.dir * eye.r * 0.5, eye.y - eye.r * 0.25, 9);
+  eg.addColorStop(0, 'hsla(10, 100%, 70%, 0.8)');
+  eg.addColorStop(1, 'transparent');
+  ctx.fillStyle = eg;
+  ctx.beginPath(); ctx.arc(eye.x + L.dir * eye.r * 0.5, eye.y - eye.r * 0.25, 9, 0, TAU); ctx.fill();
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------- dartfish school (flocking)
+const school = [];
+for (let i = 0; i < 36; i++) {
+  const a = rand(0, TAU);
+  school.push({ x: rand(0.1, 0.9) * W, y: rand(0.1, 0.6) * H,
+                vx: Math.cos(a) * 1.5, vy: Math.sin(a) * 1.5,
+                hue: rand(155, 205), ph: rand(0, TAU), scare: 0 });
+}
+function updateDrawSchool(t) {
+  let cx = 0, cy = 0, hx = 0, hy = 0;
+  for (const f of school) { cx += f.x; cy += f.y; hx += f.vx; hy += f.vy; }
+  cx /= school.length; cy /= school.length; hx /= school.length; hy /= school.length;
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.lineCap = 'round';
+  for (const f of school) {
+    // cohesion + alignment
+    f.vx += (cx - f.x) * 0.0012 + (hx - f.vx) * 0.02;
+    f.vy += (cy - f.y) * 0.0012 + (hy - f.vy) * 0.02;
+    // separation
+    for (const o of school) {
+      if (o === f) continue;
+      const dx = f.x - o.x, dy = f.y - o.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < 500 && d2 > 0.01) { f.vx += dx / d2 * 3; f.vy += dy / d2 * 3; }
+    }
+    // fear the medusa
+    const jdx = f.x - jelly.x, jdy = f.y - jelly.y;
+    const jd = Math.hypot(jdx, jdy), fear = jelly.R * 2.4;
+    if (jd < fear && jd > 1) {
+      const push = (1 - jd / fear) * 0.4 * (1 + jelly.panic * 4);
+      f.vx += jdx / jd * push; f.vy += jdy / jd * push;
+    }
+    // water current + individual jitter
+    const c = current(f.x, f.y, t);
+    f.vx += c.x * 0.02 + Math.sin(t * 2.1 + f.ph) * 0.012;
+    f.vy += c.y * 0.02;
+    // steer back from the edges
+    const m = 70;
+    if (f.x < m) f.vx += 0.07; if (f.x > W - m) f.vx -= 0.07;
+    if (f.y < m) f.vy += 0.07; if (f.y > H * 0.82) f.vy -= 0.07;
+    // speed envelope (scared fish sprint)
+    f.scare *= 0.96;
+    const sp = Math.hypot(f.vx, f.vy) || 1;
+    const max = 2.6 + f.scare * 5, min = 0.7;
+    if (sp > max) { f.vx *= max / sp; f.vy *= max / sp; }
+    if (sp < min) { f.vx *= min / sp; f.vy *= min / sp; }
+    f.x += f.vx; f.y += f.vy;
+
+    // draw: a glowing dart with a beating tail
+    const ang = Math.atan2(f.vy, f.vx);
+    const wob = Math.sin(t * 14 + f.ph) * 1.6;
+    const tx = f.x - Math.cos(ang) * 9 + Math.cos(ang + Math.PI / 2) * wob;
+    const ty = f.y - Math.sin(ang) * 9 + Math.sin(ang + Math.PI / 2) * wob;
+    const grad = ctx.createLinearGradient(f.x, f.y, tx, ty);
+    grad.addColorStop(0, `hsla(${f.hue + f.scare * 60}, 100%, 75%, 0.85)`);
+    grad.addColorStop(1, `hsla(${f.hue + 45}, 90%, 60%, 0)`);
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = 2.6;
+    ctx.beginPath(); ctx.moveTo(f.x, f.y); ctx.lineTo(tx, ty); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------- lantern eel
+const eel = { x: -150, y: H * 0.35, ang: 0, wig: rand(0, TAU), trail: [], n: 74, hue: 38 };
+function updateDrawEel(t) {
+  const e = eel;
+  // serpentine wiggle + slow wander + steer back toward open water
+  e.ang += Math.sin(t * 2.3 + e.wig) * 0.05 + Math.sin(t * 0.31 + e.wig * 2) * 0.02;
+  const m = 90;
+  if (e.x < m || e.x > W - m || e.y < m || e.y > H * 0.75) {
+    const ta = Math.atan2(H * 0.4 - e.y, W / 2 - e.x);
+    let da = ta - e.ang;
+    while (da > Math.PI) da -= TAU;
+    while (da < -Math.PI) da += TAU;
+    e.ang += da * 0.035;
+  }
+  e.x += Math.cos(e.ang) * 2.1;
+  e.y += Math.sin(e.ang) * 2.1;
+  e.trail.unshift({ x: e.x, y: e.y });
+  if (e.trail.length > e.n) e.trail.pop();
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.lineCap = 'round';
+  const p = e.trail;
+  for (let i = 1; i < p.length; i++) {
+    const f = i / e.n;
+    ctx.strokeStyle = `hsla(${e.hue + f * 30}, 95%, ${62 - f * 18}%, ${0.5 * (1 - f * 0.85)})`;
+    ctx.lineWidth = 5.5 * (1 - f) + 0.6;
+    ctx.beginPath(); ctx.moveTo(p[i - 1].x, p[i - 1].y); ctx.lineTo(p[i].x, p[i].y); ctx.stroke();
+  }
+  // lantern bulbs pulsing down the body
+  for (let i = 8; i < p.length; i += 13) {
+    const pulse = 0.5 + 0.5 * Math.sin(t * 5 - i * 0.5);
+    const r = 5 + pulse * 5;
+    const g = ctx.createRadialGradient(p[i].x, p[i].y, 0, p[i].x, p[i].y, r);
+    g.addColorStop(0, `hsla(${e.hue}, 100%, 78%, ${0.3 + pulse * 0.45})`);
+    g.addColorStop(1, 'transparent');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(p[i].x, p[i].y, r, 0, TAU); ctx.fill();
+  }
+  // incandescent head
+  const hg = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, 11);
+  hg.addColorStop(0, `hsla(${e.hue + 15}, 100%, 85%, 0.9)`);
+  hg.addColorStop(1, 'transparent');
+  ctx.fillStyle = hg;
+  ctx.beginPath(); ctx.arc(e.x, e.y, 11, 0, TAU); ctx.fill();
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------- drifting crystal shards
+const crystals = [];
+for (let i = 0; i < 9; i++) {
+  crystals.push({ x: rand(0, 3000), y: rand(0, 2000), z: rand(0.4, 1),
+                  r: rand(5, 13), sides: 3 + (i % 4), rot: rand(0, TAU),
+                  vrot: rand(-0.012, 0.012), hue: rand(260, 360), ph: rand(0, TAU) });
+}
+function drawCrystals(t) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const cr of crystals) {
+    const c = current(cr.x, cr.y, t);
+    cr.x += c.x * cr.z; cr.y += c.y * cr.z + Math.sin(t * 0.4 + cr.ph) * 0.15;
+    cr.rot += cr.vrot;
+    const x = ((cr.x % W) + W) % W, y = ((cr.y % H) + H) % H;
+    const glint = Math.pow(0.5 + 0.5 * Math.sin(t * 1.3 + cr.ph), 4);
+    const R = cr.r * cr.z;
+    ctx.strokeStyle = `hsla(${cr.hue}, 95%, 75%, ${0.12 + glint * 0.55})`;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    for (let k = 0; k <= cr.sides; k++) {
+      const a = cr.rot + (k / cr.sides) * TAU;
+      k ? ctx.lineTo(x + Math.cos(a) * R, y + Math.sin(a) * R * 1.5)
+        : ctx.moveTo(x + Math.cos(a) * R, y + Math.sin(a) * R * 1.5);
+    }
+    ctx.stroke();
+    if (glint > 0.5) { // the facet catches a ray of light
+      const g = ctx.createRadialGradient(x, y, 0, x, y, R * 3);
+      g.addColorStop(0, `hsla(${cr.hue}, 100%, 85%, ${(glint - 0.5) * 0.7})`);
+      g.addColorStop(1, 'transparent');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(x, y, R * 3, 0, TAU); ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------- hydrothermal vents
+const vents = [], bubbles = [];
+function makeVents() {
+  vents.length = 0;
+  const n = W > 1100 ? 3 : 2;
+  for (let i = 0; i < n; i++) {
+    vents.push({ x: (i + rand(0.25, 0.75)) * (W / n), hue: rand(150, 215),
+                 timer: 0, ph: rand(0, TAU) });
+  }
+}
+makeVents();
+function drawVents(t, dt) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const v of vents) {
+    const flick = 0.5 + 0.5 * Math.sin(t * 3.1 + v.ph) * Math.sin(t * 1.3 + v.ph * 2);
+    // shimmering thermal column
+    const g = ctx.createLinearGradient(0, H, 0, H * 0.45);
+    g.addColorStop(0, `hsla(${v.hue}, 90%, 60%, ${0.05 + flick * 0.05})`);
+    g.addColorStop(1, 'transparent');
+    ctx.fillStyle = g;
+    const lean = Math.sin(t * 0.6 + v.ph) * 20;
+    ctx.beginPath();
+    ctx.moveTo(v.x - 12, H); ctx.lineTo(v.x + 12, H);
+    ctx.lineTo(v.x + lean + 46, H * 0.45); ctx.lineTo(v.x + lean - 46, H * 0.45);
+    ctx.closePath(); ctx.fill();
+    // glowing vent mouth
+    const mg = ctx.createRadialGradient(v.x, H, 0, v.x, H, 28);
+    mg.addColorStop(0, `hsla(${v.hue}, 100%, 70%, ${0.35 + flick * 0.3})`);
+    mg.addColorStop(1, 'transparent');
+    ctx.fillStyle = mg;
+    ctx.beginPath(); ctx.arc(v.x, H, 28, 0, TAU); ctx.fill();
+    // exhale bubbles
+    v.timer -= dt;
+    if (v.timer <= 0) {
+      v.timer = rand(0.08, 0.3);
+      bubbles.push({ x: v.x + rand(-8, 8), y: H + 4, vy: rand(-1.9, -0.9),
+                     r: rand(1.5, 4.5), ph: rand(0, TAU), hue: v.hue, a: rand(0.4, 0.8) });
+    }
+  }
+  for (let i = bubbles.length - 1; i >= 0; i--) {
+    const b = bubbles[i];
+    b.y += b.vy; b.x += Math.sin(t * 3 + b.ph) * 0.5;
+    b.a -= 0.002;
+    if (b.a <= 0.02 || b.y < H * 0.3) { bubbles.splice(i, 1); continue; }
+    ctx.strokeStyle = `hsla(${b.hue}, 90%, 78%, ${b.a})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, TAU); ctx.stroke();
+    ctx.fillStyle = `hsla(${b.hue}, 100%, 88%, ${b.a * 0.5})`;
+    ctx.beginPath(); ctx.arc(b.x - b.r * 0.35, b.y - b.r * 0.35, b.r * 0.3, 0, TAU); ctx.fill();
+  }
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------- seafloor anemones
+const anemones = [];
+function makeAnemones() {
+  anemones.length = 0;
+  const n = Math.max(3, Math.floor(W / 320));
+  for (let i = 0; i < n; i++) {
+    anemones.push({ x: (i + rand(0.2, 0.8)) * (W / n), r: rand(14, 30),
+                    hue: rand(280, 360), nT: 7 + Math.floor(rand(0, 5)), ph: rand(0, TAU) });
+  }
+}
+makeAnemones();
+function drawAnemones(t) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.lineCap = 'round';
+  for (const an of anemones) {
+    const breathe = 0.5 + 0.5 * Math.sin(t * 0.9 + an.ph);
+    // luminous dome
+    const g = ctx.createRadialGradient(an.x, H, 0, an.x, H, an.r * 1.6);
+    g.addColorStop(0, `hsla(${an.hue}, 85%, 60%, ${0.22 + breathe * 0.15})`);
+    g.addColorStop(1, 'transparent');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(an.x, H, an.r * 1.6, Math.PI, TAU); ctx.fill();
+    // breathing tendrils fanning out of the dome
+    for (let k = 0; k < an.nT; k++) {
+      const u = k / (an.nT - 1);
+      const bx = an.x + (u - 0.5) * an.r * 1.4;
+      const wave = Math.sin(t * 1.4 + an.ph + k) * 8;
+      const len = an.r * (1.3 + breathe * 0.8) * (0.7 + Math.sin(u * Math.PI) * 0.5);
+      const tx = bx + (u - 0.5) * an.r * 1.2 + wave;
+      const ty = H - len;
+      ctx.strokeStyle = `hsla(${an.hue + k * 6}, 90%, 68%, 0.35)`;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(bx, H);
+      ctx.quadraticCurveTo(bx + wave * 0.5, H - len * 0.6, tx, ty);
+      ctx.stroke();
+      const pulse = 0.5 + 0.5 * Math.sin(t * 2.2 + k * 1.7 + an.ph);
+      const tg = ctx.createRadialGradient(tx, ty, 0, tx, ty, 3 + pulse * 4);
+      tg.addColorStop(0, `hsla(${an.hue + 40}, 100%, 80%, ${0.25 + pulse * 0.5})`);
+      tg.addColorStop(1, 'transparent');
+      ctx.fillStyle = tg;
+      ctx.beginPath(); ctx.arc(tx, ty, 3 + pulse * 4, 0, TAU); ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------- distant bioluminescent flashes
+const flash = { next: rand(4, 10), a: 0, x: 0, y: 0, hue: 200 };
+function drawFlash(dt) {
+  flash.next -= dt;
+  if (flash.next <= 0) {
+    flash.next = rand(6, 15);
+    flash.a = rand(0.4, 0.85);
+    flash.x = rand(0.1, 0.9) * W;
+    flash.y = rand(0, 0.35) * H;
+    flash.hue = rand(180, 300);
+  }
+  if (flash.a > 0.01) {
+    flash.a *= 0.87;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const r = Math.max(W, H) * 0.5;
+    const g = ctx.createRadialGradient(flash.x, flash.y, 0, flash.x, flash.y, r);
+    g.addColorStop(0, `hsla(${flash.hue}, 90%, 70%, ${flash.a * 0.35})`);
+    g.addColorStop(1, 'transparent');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(flash.x, flash.y, r, 0, TAU); ctx.fill();
+    ctx.restore();
+  }
+}
+
 // ---------------------------------------------------------------- main loop
 let last = performance.now();
 function frame(now) {
@@ -480,13 +850,21 @@ function frame(now) {
   const t = now / 1000;
 
   drawBackground(t);
+  drawAurora(t);
   drawRays(t);
+  updateLeviathan(t, dt);
   drawDrifters(t);
+  drawCrystals(t);
   drawMotes(t);
+  updateDrawEel(t);
   drawFlora(t);
+  drawAnemones(t);
+  drawVents(t, dt);
+  updateDrawSchool(t);
   jelly.update(t, dt);
   jelly.draw(t);
   drawEffects();
+  drawFlash(dt);
 
   requestAnimationFrame(frame);
 }
